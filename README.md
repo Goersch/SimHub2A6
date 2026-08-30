@@ -53,7 +53,13 @@ A few videos of the rig are available on YouTube: [G3org1970](https://www.youtub
 > conservative speed limits, and keep a tested hardware emergency stop within
 > reach. Read [SECURITY.md](SECURITY.md) before enabling servo power.
 
-## Hardware layout
+## Installation and hardware overview
+
+This project is designed for a custom seven-axis motion rig driven by
+StepperOnline A6 750 W servo drives and controlled through Modbus RTU over
+RS-485. The software acts as a bridge between SimHub motion data and the
+physical rig, validating incoming positions, applying safety checks, and
+sending synchronized actuator commands to the servo hardware.
 
 The reference installation uses seven StepperOnline A6 750 W servo axes:
 
@@ -81,6 +87,11 @@ The supplied reference geometry is:
 
 These values are installation-specific. Measure your rig and update the INI
 before moving any axis.
+
+The rig is organized as a four-corner lift platform with a dedicated surge axis
+and two traction-loss axes. The actuators work together to generate pitch,
+roll, heave, and longitudinal motion while the controller keeps the load
+balanced and the safety limits enforced at software and hardware level.
 
 ## Requirements
 
