@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = ["SimHubData", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Package imports must follow the direct-script bootstrap in this entry point.
+"Dialog.py" = ["E402"]
+"A6Commands.py" = ["F401"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+include = ["*.py", "LIB", "tests"]
+extraPaths = [".."]
+exclude = ["SimHubData", "__pycache__"]
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.venv/
+venv/
+
+# Editors and local agent configuration
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Runtime output and machine-specific state
+LOG/
+SimHubData/
+INI/grease_data.json
+INI/leveling_offsets.json
+INI/simrig_load_values.json
+
+# Generated analysis reports
+analysis/latest_position_report/
+analysis/simhub_motion_report/
+
+# Third-party documentation (download from the manufacturer)
+A6-RS_Series_Servo_Drive_Manual.pdf
+
+# Windows and temporary files
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
+*.backup-*
+.git-onedrive-backup/
+.gh-cli/
+.gh-cli.zip
+.publish-git/
+.publish-work/
