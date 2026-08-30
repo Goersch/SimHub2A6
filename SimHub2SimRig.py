@@ -175,6 +175,10 @@ def parse_and_dispatch(message: str, reply_address=None):
             except ValueError as exc:
                 logger.warning("Invalid POSITIONS command: %s", exc)
                 continue
+            if not SimHubGameRunning:
+                logger.info("SimHub telemetric stream started without explicit START command")
+                SimHubGameRunning = True
+                start_simhub_recording()
             set_values(*positions)
         elif cmd == "END":
             if SimHubGameRunning:
