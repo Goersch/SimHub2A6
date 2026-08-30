@@ -1,0 +1,15 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	symlinks = false
+	ignorecase = true
+[user]
+	name = Georg Nowak
+	email = github@nowakonline.de
+[remote "origin"]
+	url = https://github.com/Goersch/SimHub2A6.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
