@@ -20,7 +20,7 @@ if __package__ in (None, ""):
 
 simhub = None
 
-from . import Analyse, Grease, Leveling, Wartung
+from . import Analyse, Grease, Leveling, Maintenance
 from .LIB.a6_motion_controller import motion_controller
 from .LIB.a6_simu import a6_simulator
 from .LIB.config import CONTROL_CONFIG, GREASE_CONFIG, RIG_CONFIG, SIMHUB_CONFIG, UI_CONFIG
@@ -620,7 +620,7 @@ class Dialog(tk.Tk):
             )
             return
 
-        self._maintenance_dialog = Wartung.WartungDialog(
+        self._maintenance_dialog = Maintenance.WartungDialog(
             self,
             shcmd,
             self._simhub_connected,
