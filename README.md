@@ -9,6 +9,41 @@ The project includes homing, synchronized position updates, four-corner load
 leveling, load calibration, maintenance controls, greasing reminders, live
 diagnostics, and CSV motion recording.
 
+## Key features
+
+### Leveling
+
+The leveling workflow automatically compensates for uneven loads across the
+rig and keeps the platform balanced during operation. It measures the current
+load distribution, selects the most suitable fixed reference axis, and applies
+small corrective offsets to the active actuators until the platform sits within
+the configured tolerance. This reduces tilt, improves motion fidelity, and helps
+keep the rig mechanically stable over time.
+
+### Grease
+
+The grease routine supports periodic maintenance for the rig's moving parts. It
+tracks operating time, reminds the user when lubrication intervals are due, and
+lets the operator run a controlled maintenance cycle for the selected axes. The
+system can record the last greasing event and accumulate runtime so the service
+schedule remains consistent and easy to monitor.
+
+### Analysis
+
+The analysis tools make it easier to inspect recorded SimHub motion data and
+verify how the rig behaves in real use. The project can load CSV recordings,
+plot target values and actual positions, compare motion traces, and highlight
+signals such as ground deviation or calculated actual position. This is useful
+for diagnosing setup issues, tuning geometry, and validating motion quality.
+
+### Motion mode radio buttons
+
+The mode selection controls the behaviour of the rig during operation. The
+available radio-button options let the user switch between normal SimHub-driven
+motion, actual-position reading, and a centered inactive mode. This makes it
+possible to test individual axes, inspect actual feedback, or safely move the
+rig to a neutral centered position without leaving SimHub control active.
+
 ## SimRig videos
 
 A few videos of the rig are available on YouTube: [G3org1970](https://www.youtube.com/@G3org1970)
