@@ -690,12 +690,6 @@ class AnalyseDialog(tk.Toplevel):
         y = parent_y + max(0, (parent_height - height) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
         self.deiconify()
-        try:
-            self.state("zoomed")
-        except tk.TclError:
-            self.geometry(
-                f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
-            )
         self.lift()
         self.focus_force()
 

@@ -92,7 +92,8 @@ class WartungDialog(tk.Toplevel):
         self._status_after_id = None
 
         self.title(language_text("Maintenance", "title"))
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(420, 320)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.transient(parent)
 
