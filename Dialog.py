@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from contextlib import nullcontext
 from ctypes import wintypes
 from datetime import datetime
@@ -171,6 +172,7 @@ class Dialog(tk.Tk):
         self._refresh_after_id = None
         self._motor_after_id = None
         self._trigger_chart_after_id = None
+        self._trigger_chart_samples = deque()
         self._apply_motor_after_ids = set()
         self._motor_refresh_in_progress = False
         self._motor_next_axis = 1
@@ -1009,23 +1011,31 @@ class Dialog(tk.Tk):
 
         now = time.time()
         cutoff = now - TRIGGER_CHART_WINDOW_S
-        samples = []
         current_simhub = get_simhub_module()
         if current_simhub is not None:
             interval_lock = getattr(current_simhub, "triggerIntervalLock", None)
-            stored_samples = getattr(current_simhub, "triggerIntervalSamples", None)
-            if interval_lock is not None and stored_samples is not None:
+            pending_samples = getattr(current_simhub, "triggerIntervalSamples", None)
+            if interval_lock is not None and pending_samples is not None:
                 try:
                     with interval_lock:
-                        samples = [
-                            sample
-                            for sample in stored_samples
-                            if sample[0] >= cutoff
-                        ]
+                        # Transfer the complete batch atomically. Samples added
+                        # by the sender after this block remain pending for the
+                        # next one-second refresh.
+                        self._trigger_chart_samples.extend(pending_samples)
+                        pending_samples.clear()
                 except Exception:
-                    samples = []
+                    logger.exception("Could not transfer trigger chart samples")
 
-        self.trigger_interval_chart.set_samples(samples, now)
+        while (
+            self._trigger_chart_samples
+            and self._trigger_chart_samples[0][0] < cutoff
+        ):
+            self._trigger_chart_samples.popleft()
+
+        self.trigger_interval_chart.set_samples(
+            list(self._trigger_chart_samples),
+            now,
+        )
         self._trigger_chart_after_id = self.after(
             TRIGGER_CHART_REFRESH_MS,
             self._refresh_trigger_chart,
