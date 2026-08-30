@@ -21,6 +21,7 @@ SimHubData/
 INI/grease_data.json
 INI/leveling_offsets.json
 INI/simrig_load_values.json
+INI/room_light.ini
 
 # Generated analysis reports
 analysis/latest_position_report/

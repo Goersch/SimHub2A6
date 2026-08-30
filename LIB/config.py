@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "INI" / "SimHub2SimRig.ini"
+LOCAL_ROOM_LIGHT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "INI" / "room_light.ini"
 
 
 class ConfigurationError(ValueError):
@@ -511,9 +512,20 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
             ),
             connected_background=parser.get("ui", "connected_background"),
         )
+
+        room_light_parser = ConfigParser(interpolation=None)
+        if room_light_parser.read(LOCAL_ROOM_LIGHT_CONFIG_PATH, encoding="utf-8"):
+            pass
+        elif parser.has_section("room_light"):
+            room_light_parser = parser
+        else:
+            raise ConfigurationError(
+                f"Missing room-light config in {LOCAL_ROOM_LIGHT_CONFIG_PATH}"
+            )
+
         room_light_config = RoomLightConfig(
-            uri=parser.get("room_light", "uri"),
-            request_timeout_s=parser.getfloat(
+            uri=room_light_parser.get("room_light", "uri"),
+            request_timeout_s=room_light_parser.getfloat(
                 "room_light", "request_timeout_s"
             ),
         )
