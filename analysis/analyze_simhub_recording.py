@@ -39,6 +39,7 @@ def main() -> None:
 
     timestamps = [datetime.fromisoformat(row["Timestamp"]) for row in rows]
     cycle_ms = [(b - a).total_seconds() * 1000 for a, b in zip(timestamps, timestamps[1:], strict=False)]
+    axis_results: list[dict[str, object]] = []
     result: dict[str, object] = {
         "recording": csv_path.name,
         "rows": len(rows),
@@ -48,7 +49,7 @@ def main() -> None:
             "p95": round(percentile(cycle_ms, 0.95), 3),
             "max": round(max(cycle_ms), 3),
         },
-        "axes": [],
+        "axes": axis_results,
     }
 
     speed_limits = {axis: (300.0 if axis <= 3 else 135.0) for axis in range(1, 8)}
@@ -73,7 +74,7 @@ def main() -> None:
         reversals = sum(a != b for a, b in zip(directions, directions[1:], strict=False))
         model_target = [abs(a - b) for a, b in zip(model, target, strict=False)]
         actual_model = [abs(a - b) for a, b in zip(actual, model, strict=False)]
-        result["axes"].append(
+        axis_results.append(
             {
                 "axis": axis,
                 "target_min_mm": round(min(target), 3),

@@ -4,6 +4,7 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import font, messagebox
+from typing import cast
 
 from . import Grease
 from .LIB.config import CONTROL_CONFIG, GREASE_CONFIG, SIMHUB_CONFIG
@@ -79,8 +80,8 @@ class WartungDialog(tk.Toplevel):
         self._homing_buttons = []
         self.grease_buttons = []
         self.grease_info_labels = []
-        self._grease_active_range = None
-        self._grease_stopping_range = None
+        self._grease_active_range: tuple[int, int] | None = None
+        self._grease_stopping_range: tuple[int, int] | None = None
         self._front_homed = False
         self._hub_homed = False
         self._middle_homed = False
@@ -584,8 +585,8 @@ class WartungDialog(tk.Toplevel):
         previous_range = self._grease_active_range
         if Grease.greaseActive:
             self._grease_active_range = (
-                Grease.greaseAxisFrom,
-                Grease.greaseAxisTo,
+                cast(int, Grease.greaseAxisFrom),
+                cast(int, Grease.greaseAxisTo),
             )
             if previous_range != self._grease_active_range:
                 axis_name = self._grease_axis_name(*self._grease_active_range)

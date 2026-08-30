@@ -50,13 +50,15 @@ with SOURCE.open("r", encoding="utf-8-sig", newline="") as handle:
             raw_read_timestamp = row.get(f"ActualPositionTimestamp{axis}")
             raw_age_ms = row.get(f"ActualPositionAgeMs{axis}")
             try:
-                read_timestamp = datetime.fromisoformat(
-                    raw_read_timestamp
-                ).timestamp()
+                read_timestamp = (
+                    datetime.fromisoformat(raw_read_timestamp).timestamp()
+                    if raw_read_timestamp is not None
+                    else None
+                )
             except (TypeError, ValueError):
                 read_timestamp = None
             try:
-                age_ms = float(raw_age_ms)
+                age_ms = float(raw_age_ms) if raw_age_ms is not None else None
             except (TypeError, ValueError):
                 age_ms = None
             if read_timestamp is None and age_ms is not None:

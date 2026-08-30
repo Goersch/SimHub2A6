@@ -15,9 +15,9 @@ ignore = ["E501"]
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-include = ["*.py", "LIB", "tests"]
+include = ["*.py", "LIB", "analysis", "tools"]
 extraPaths = [".."]
-exclude = ["SimHubData", "__pycache__"]
+exclude = ["SimHubData", "__pycache__", "tests"]
 reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]

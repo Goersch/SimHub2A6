@@ -117,12 +117,18 @@ def calculate_simrig_state(hub_positions_mm):
     a negative value means that the selected support set cannot statically
     carry the configured center of gravity without tensile ground force.
     """
-    if len(hub_positions_mm) != 4:
+    raw_positions = tuple(hub_positions_mm)
+    if len(raw_positions) != 4:
         raise ValueError("Four hub positions are required for axes 4 through 7")
 
     points = _hub_points()
     wheelbase = RIG_CONFIG.distance_front_to_rear_drives_mm
-    positions = tuple(float(position) for position in hub_positions_mm)
+    positions = (
+        float(raw_positions[0]),
+        float(raw_positions[1]),
+        float(raw_positions[2]),
+        float(raw_positions[3]),
+    )
     # Plane z = offset + pitch*x + roll*y through both front feet and the
     # midpoint between the two rear actuator heights.
     reference_rows = (
@@ -148,7 +154,8 @@ def calculate_simrig_state(hub_positions_mm):
     else:
         loads = _four_point_loads(points, center_of_gravity)
         lifted_axis = None
-    return SimRigState(deviations, loads, lifted_axis)
+    ground_loads = (float(loads[0]), float(loads[1]), float(loads[2]), float(loads[3]))
+    return SimRigState(deviations, ground_loads, lifted_axis)
 
 
 def simrig_emu(hub_positions_mm):
@@ -182,8 +189,12 @@ class A6Simulator:
         initial = AxisCommand(0.0, 400, 0.0, 400, center_raw)
         self._states = [AxisState(initial, 0.0) for _ in range(self.axis_count)]
         self._read_actual_positions_mm = [0.0] * self.axis_count
-        self._read_actual_position_timestamps = [None] * self.axis_count
-        self._read_actual_position_monotonic = [None] * self.axis_count
+        self._read_actual_position_timestamps: list[datetime | None] = [
+            None
+        ] * self.axis_count
+        self._read_actual_position_monotonic: list[float | None] = [
+            None
+        ] * self.axis_count
         self._read_actual_positions_enabled = False
         self._pending = {}
         self._lock = threading.RLock()

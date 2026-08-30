@@ -40,14 +40,25 @@ def _hub_points():
 
 
 def calibration_from_load_rates(load_rates, recorded_at=None):
-    values = tuple(float(value) for value in load_rates)
-    if len(values) != len(HUB_AXIS_IDS):
+    raw_values = tuple(load_rates)
+    if len(raw_values) != len(HUB_AXIS_IDS):
         raise ValueError("Load values are required for axes 4 through 7")
+    values = (
+        float(raw_values[0]),
+        float(raw_values[1]),
+        float(raw_values[2]),
+        float(raw_values[3]),
+    )
     if any(value <= 0.0 for value in values):
         raise ValueError("All four Load values must be greater than zero")
 
     total = sum(values)
-    normalized = tuple(value / total for value in values)
+    normalized = (
+        values[0] / total,
+        values[1] / total,
+        values[2] / total,
+        values[3] / total,
+    )
     points = _hub_points()
     center_front_to_rear = sum(
         load * point[0] for load, point in zip(normalized, points, strict=False)
