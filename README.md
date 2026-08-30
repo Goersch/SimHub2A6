@@ -9,6 +9,10 @@ The project includes homing, synchronized position updates, four-corner load
 leveling, load calibration, maintenance controls, greasing reminders, live
 diagnostics, and CSV motion recording.
 
+## SimRig videos
+
+A few videos of the rig are available on YouTube: [G3org1970](https://www.youtube.com/@G3org1970)
+
 > [!WARNING]
 > This software moves high-power machinery. Start with the rig unloaded, use
 > conservative speed limits, and keep a tested hardware emergency stop within
