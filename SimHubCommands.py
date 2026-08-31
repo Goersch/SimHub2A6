@@ -54,6 +54,7 @@ MAINTENANCE_HUB_RPM = CONTROL_CONFIG.maintenance_hub_rpm
 AXIS_WAIT_TIMEOUT_S = CONTROL_CONFIG.axis_wait_timeout_s
 HOMING_WAIT_TIMEOUT_S = CONTROL_CONFIG.homing_wait_timeout_s
 WAIT_POLL_INTERVAL_S = CONTROL_CONFIG.wait_poll_interval_s
+SHUTDOWN_CENTER_SETTLE_S = 2.0
 
 
 @dataclass
@@ -68,6 +69,9 @@ class SimHubRuntimeState:
         default_factory=lambda: [0.0] * maxAxis
     )
     positions_enabled: bool = True
+    maintenance_active: bool = False
+    shutdown_active: bool = False
+    simhub_positions_armed: bool = True
     position_lock: threading.RLock = field(default_factory=threading.RLock)
     previous_raw_positions: list = field(
         default_factory=lambda: [int(maxPos / 2)] * maxAxis
@@ -108,6 +112,36 @@ def set_simhub_positions_enabled(enabled:bool):
         runtime_state.positions_enabled = bool(enabled)
     mode = "SimHub" if runtime_state.positions_enabled else "center position"
     logger.info("Operating mode: %s", mode)
+
+
+def set_maintenance_active(active: bool) -> None:
+    """Block SimHub motion while the maintenance dialog owns the axes."""
+    with runtime_state.position_lock:
+        runtime_state.maintenance_active = bool(active)
+        if active:
+            # Require a fresh POSITIONS packet after maintenance. Otherwise the
+            # sender could apply a stale target as soon as the dialog closes.
+            runtime_state.simhub_positions_armed = False
+    logger.info("Maintenance mode %s", "active" if active else "inactive")
+
+
+def simhub_telegrams_blocked() -> bool:
+    # This check runs in the high-frequency sender loop and must not wait for a
+    # maintenance operation that currently owns position_lock.
+    return runtime_state.maintenance_active or runtime_state.shutdown_active
+
+
+def shutdown_in_progress() -> bool:
+    return runtime_state.shutdown_active
+
+
+def arm_simhub_positions() -> bool:
+    """Allow motion only for a packet received outside maintenance mode."""
+    with runtime_state.position_lock:
+        if runtime_state.maintenance_active or runtime_state.shutdown_active:
+            return False
+        runtime_state.simhub_positions_armed = True
+        return True
 
 
 def center_all_axes():
@@ -198,6 +232,28 @@ def ensure_maintenance_planners(axes) -> None:
             runtime_state.previous_positions[axis - 1] = current_position_mm
 
 
+def restore_planner_mode_after_maintenance() -> None:
+    """Resume existing planners and restart only planners stopped by homing."""
+    with runtime_state.position_lock:
+        axes = enabled_axes()
+        current_positions = {
+            axis: motion_controller.read_position_mm(axis) for axis in axes
+        }
+        for axis in axes:
+            current_position_mm = current_positions[axis]
+            if axis in runtime_state.maintenance_planner_axes:
+                # The planner is already configured. Rewriting C11.00 while it
+                # is active is rejected by the drive with Modbus exception 04.
+                # Hub maintenance may have disabled S-ON to apply the brakes,
+                # so enabling the servo is the only restoration needed here.
+                motion_controller.set_servo_enabled(axis, True)
+            else:
+                # Homing stops the planner and removes the axis from the set.
+                motion_controller.planner_start(axis, current_position_mm)
+            runtime_state.previous_positions[axis - 1] = current_position_mm
+        runtime_state.maintenance_planner_axes.clear()
+
+
 def _set_hub_servos_enabled(hub_axes, enabled: bool) -> None:
     """Set every hub servo and still attempt the remaining axes after an error."""
     first_error = None
@@ -233,6 +289,9 @@ def maintenance_homing_status():
 def home_axes_for_maintenance(first_axis:int, last_axis:int):
     """Home every requested maintenance axis and update its cached position."""
     requested_axes = list(range(first_axis, last_axis + 1))
+    shared_hub_trigger = (
+        first_axis == HUB_AXIS_FROM and last_axis == HUB_AXIS_TO
+    )
     inactive_axes = [axis for axis in requested_axes if not axis_enabled(axis)]
     if inactive_axes:
         raise RuntimeError(f"Axes not enabled: {inactive_axes}")
@@ -242,7 +301,16 @@ def home_axes_for_maintenance(first_axis:int, last_axis:int):
             runtime_state.maintenance_planner_axes.discard(axis)
             motion_controller.planner_stop(axis)
         for axis in requested_axes:
-            motion_controller.start_homing(axis, ignore_status=True)
+            motion_controller.start_homing(
+                axis,
+                ignore_status=True,
+                trigger=not shared_hub_trigger,
+            )
+        if shared_hub_trigger:
+            # All hub axes are prepared first; the broadcast creates one
+            # shared trigger edge on every configured Modbus connection.
+            time.sleep(1)
+            motion_controller.trigger_homing(0)
         wait_for_homing(first_axis, last_axis)
         for axis in requested_axes:
             runtime_state.previous_positions[axis - 1] = RIG_CONFIG.limits.homing_mm
@@ -346,6 +414,8 @@ def enabled_axes(firstAxis:int=1, lastAxis:int | None=None):
     return [axis for axis in range(firstAxis, lastAxis + 1) if axis_enabled(axis)]
 
 def handle_init():
+    with runtime_state.position_lock:
+        runtime_state.shutdown_active = False
     if runtime_state.initializing:
         raise RuntimeError("A6 initialization is already running")
     runtime_state.initializing = True
@@ -419,7 +489,15 @@ def _run_initialization():
         for axis in axes_to_home:
             # The status was checked immediately above.  Do not let a second,
             # changing read suppress a homing command selected by that check.
-            motion_controller.start_homing(axis, ignore_status=True)
+            motion_controller.start_homing(
+                axis,
+                ignore_status=True,
+                trigger=False,
+            )
+        time.sleep(1)
+        # All selected axes are enabled and prepared before one broadcast edge
+        # reaches all seven drives at the same time.
+        motion_controller.trigger_homing(0)
         wait_for_homing(1, MAX_AXIS)
     else:
         logger.info("All enabled axes are already referenced")
@@ -489,6 +567,9 @@ def handle_pos_2(axis:int, value:int, trigger:bool=True):
 def _handle_pos_2(axis:int, value:int, trigger:bool=True):
     if (
         not runtime_state.positions_enabled
+        or runtime_state.maintenance_active
+        or runtime_state.shutdown_active
+        or not runtime_state.simhub_positions_armed
         or not runtime_state.initialized
         or runtime_state.initializing
         or Grease.greaseActive
@@ -639,25 +720,38 @@ def wait_for_homing(
 
 def handle_end():
     logger.info("Shutting down A6")
+    with runtime_state.position_lock:
+        runtime_state.shutdown_active = True
+        runtime_state.simhub_positions_armed = False
     if not runtime_state.initialized:
         motion_controller.disconnect()
         return
 
-    runtime_state.initialized = False
     try:
-        go_to_pos(1, int(maxPos/2)) # Center axis 1
-        go_to_pos(2, int(maxPos/2)) # Center axis 2
-        go_to_pos(3, int(maxPos/2)) # Center axis 3
-        wait_for_axis_to_reach_position(1, 3)
+        logger.info("Centering all axes before shutdown")
+        center_all_axes()
+        logger.info("All axes centered")
+        time.sleep(SHUTDOWN_CENTER_SETTLE_S)
 
         for axis in enabled_axes():
             #time.sleep(0.2)
             motion_controller.planner_stop(axis)
 
-        for axis in enabled_axes(4, 7):
-            motion_controller.start_homing(axis, ignore_status=True, initialize=False) # Home axes to ensure safe position before shutdown
-        wait_for_homing(4,7)
+        hub_axes = enabled_axes(4, 7)
+        for axis in hub_axes:
+            # Prepare every hub axis before sending one shared start edge.
+            motion_controller.start_homing(
+                axis,
+                ignore_status=True,
+                initialize=False,
+                trigger=False,
+            )
+        time.sleep(1)
+        if hub_axes:
+            motion_controller.trigger_homing(0)
+        wait_for_homing(4, 7)
     finally:
+        runtime_state.initialized = False
         motion_controller.disconnect()
 
 def main():

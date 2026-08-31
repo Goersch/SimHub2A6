@@ -28,6 +28,7 @@ SERIAL_RESPONSE_POLL_DELAY_S = MODBUS_CONFIG.response_poll_delay_s
 QUEUE_DRAIN_TIMEOUT_S = MODBUS_CONFIG.queue_drain_timeout_s
 TASK_WAIT_TIMEOUT_S = MODBUS_CONFIG.task_wait_timeout_s
 WORKER_JOIN_TIMEOUT_S = MODBUS_CONFIG.worker_join_timeout_s
+PORT_OPEN_DELAY_S = 0.5
 
 # Function and device-specific error codes
 FC_READ = 0x03
@@ -211,7 +212,11 @@ class ModbusManager:
             serial_factory = self.serial_factory or serial.Serial
             opened_connections = []
             try:
-                for port, axes in self.connection_configs:
+                for connection_index, (port, axes) in enumerate(
+                    self.connection_configs
+                ):
+                    if connection_index:
+                        time.sleep(PORT_OPEN_DELAY_S)
                     serial_port = serial_factory(
                         port,
                         self.baud,
@@ -555,6 +560,11 @@ def _check_crc(rx: bytes, where: str) -> None:
 
 
 def _parse_error(rx: bytes, where: str) -> None:
+    if len(rx) == 5 and rx[1] & 0x80:
+        raise RuntimeError(
+            f"{where}: Modbus exception 0x{rx[2]:02X} "
+            f"(function 0x{rx[1] & 0x7F:02X})"
+        )
     if len(rx) >= 8 and rx[1] == FC_ERROR:
         code = (rx[2] << 24) | (rx[3] << 16) | (rx[4] << 8) | rx[5]
         raise RuntimeError(f"{where}: Drive-Error 0x{code:08X}")

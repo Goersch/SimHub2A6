@@ -151,6 +151,40 @@ class MotionPipelineTests(unittest.TestCase):
             if frame[0] == axis
         ]
 
+    def test_sender_is_fully_paused_during_maintenance(self):
+        stop_event = OneCycleStopEvent()
+        samples = []
+        handle_position = MagicMock()
+        fake_time = SimpleNamespace(
+            perf_counter=MagicMock(return_value=0.0),
+            sleep=MagicMock(),
+            time=MagicMock(return_value=1000.0),
+        )
+        with (
+            patch.object(SimHub2SimRig, "stopEvent", stop_event),
+            patch.object(SimHub2SimRig, "latestLock", threading.Lock()),
+            patch.object(SimHub2SimRig, "latestValues", [0] * 7),
+            patch.object(SimHub2SimRig, "triggerIntervalSamples", samples),
+            patch.object(SimHub2SimRig, "time", fake_time),
+            patch.object(SimHub2SimRig.Analyse, "analyseActive", False),
+            patch.object(
+                SimHub2SimRig.shcmd,
+                "simhub_telegrams_blocked",
+                return_value=True,
+            ),
+            patch.object(
+                SimHub2SimRig.shcmd,
+                "handle_pos_2",
+                handle_position,
+            ),
+            patch.object(SimHub2SimRig.motion_controller, "planner_trigger") as trigger,
+        ):
+            SimHub2SimRig.sender_thread()
+
+        handle_position.assert_not_called()
+        trigger.assert_not_called()
+        self.assertEqual(samples, [])
+
     def test_parallel_axes_with_cached_parameters_wait_then_trigger_once(self):
         axis_1_rpm = rpm_from_mm_per_second(1, SimHubCommands.SPEED_MM_S[0])
         self.controller.state.parameter_cache[1] = {

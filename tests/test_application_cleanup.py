@@ -35,6 +35,30 @@ class ApplicationCleanupTests(unittest.TestCase):
         dialog.assert_not_called()
         sock.close.assert_called_once_with()
 
+    def test_com_initialization_failure_prevents_dialog_and_threads(self):
+        sock = MagicMock()
+        with (
+            patch.object(SimHub2SimRig, "install_file_logging"),
+            patch.object(SimHub2SimRig, "delete_expired_simhub_data"),
+            patch.object(
+                SimHub2SimRig.shcmd,
+                "handle_init",
+                side_effect=OSError("COM2 unavailable"),
+            ),
+            patch.object(SimHub2SimRig.shcmd, "handle_end") as handle_end,
+            patch.object(SimHub2SimRig.a6_simulator, "start") as simulator_start,
+            patch.object(SimHub2SimRig.threading, "Thread") as thread,
+            patch.object(SimHub2SimRig.socket, "socket", return_value=sock),
+            patch.object(SimHub2SimRig, "Dialog") as dialog,
+        ):
+            SimHub2SimRig.main()
+
+        dialog.assert_not_called()
+        thread.assert_not_called()
+        simulator_start.assert_not_called()
+        handle_end.assert_not_called()
+        sock.close.assert_called_once_with()
+
     def test_dialog_startup_error_runs_shutdown_cleanup(self):
         thread = MagicMock()
         sock = MagicMock()

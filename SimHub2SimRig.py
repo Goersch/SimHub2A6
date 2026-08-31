@@ -74,7 +74,8 @@ def sender_thread():
         with latestLock:
             values = latestValues.copy()
 
-        if not Analyse.analyseActive:
+        maintenance_active = shcmd.simhub_telegrams_blocked()
+        if not Analyse.analyseActive and not maintenance_active:
             try:
                 position_updated = False
                 position_updated |= shcmd.handle_pos_2(1,values[0], trigger=False)
@@ -102,6 +103,10 @@ def sender_thread():
             except Exception as e:
                 logger.warning("Sender thread communication error: %s", e)
                 time.sleep(0.1)
+        else:
+            # Do not include a paused maintenance/analysis interval in the
+            # sender-cycle chart when processing resumes.
+            previous_cycle_time = None
 
         next_time += cycle_s
         rest = next_time - time.perf_counter()
@@ -166,6 +171,11 @@ def parse_and_dispatch(message: str, reply_address=None):
         tokens = part.split(maxsplit=1)
         cmd = tokens[0].upper()
 
+        if shcmd.shutdown_in_progress():
+            continue
+        if cmd != "SHUTDOWN" and shcmd.simhub_telegrams_blocked():
+            continue
+
         if cmd == "POSITIONS":
             if len(tokens) != 2:
                 logger.warning("Invalid POSITIONS command: missing payload")
@@ -180,6 +190,7 @@ def parse_and_dispatch(message: str, reply_address=None):
                 SimHubGameRunning = True
                 start_simhub_recording()
             set_values(*positions)
+            shcmd.arm_simhub_positions()
         elif cmd == "END":
             if SimHubGameRunning:
                 logger.info("SimHub game ended")
@@ -267,7 +278,15 @@ def main():
     try:
         shcmd.handle_init()
     except Exception:
-        logger.exception("Failed to initialize A6; check remote switches")
+        logger.exception(
+            "Failed to initialize A6 or open every configured COM connection; "
+            "application startup aborted"
+        )
+        try:
+            sock.close()
+        except Exception:
+            logger.exception("Failed to close UDP socket after startup error")
+        return
 
     a6_simulator.start()
 

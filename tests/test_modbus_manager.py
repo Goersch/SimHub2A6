@@ -36,6 +36,17 @@ class FakeSerial:
 
 
 class ModbusManagerTests(unittest.TestCase):
+    def test_register_write_reports_standard_modbus_exception(self):
+        response = bytes([1, modbus.FC_WRITE | 0x80, 0x04])
+        response += modbus.crc16_modbus(response).to_bytes(2, "little")
+
+        with patch.object(modbus, "xfer", return_value=response):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"Modbus exception 0x04 \(function 0x06\)",
+            ):
+                modbus.write_reg(1, 0x1100, 3)
+
     def test_register_write_retries_one_crc_error(self):
         valid_response = modbus.build_write(4, 0x1100, 3)
         invalid_response = valid_response[:-1] + bytes([valid_response[-1] ^ 0xFF])

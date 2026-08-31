@@ -163,10 +163,11 @@ class A6MotionController:
             self.trigger_homing(axis_id)
 
     def trigger_homing(self, axis_id: int) -> None:
+        check_crc = axis_id != 0
         self._sleep(0.25)
-        self.driver.write_reg(axis_id, reg.HOM_TRIG, 1)
+        self.driver.write_reg(axis_id, reg.HOM_TRIG, 1, checkCRC=check_crc)
         self._sleep(0.25)
-        self.driver.write_reg(axis_id, reg.HOM_TRIG, 0)
+        self.driver.write_reg(axis_id, reg.HOM_TRIG, 0, checkCRC=check_crc)
         logger.info("Axis %s: homing trigger sent", axis_id)
 
     def homing_started(self, axis_id: int) -> bool:
@@ -334,6 +335,10 @@ class A6MotionController:
         axis_id: int,
         initial_position_mm: float = 0.0,
     ) -> None:
+        # C11 planner parameters are not writable while the drive is enabled.
+        # This also makes restarting an already active maintenance planner safe.
+        self.driver.write_reg(axis_id, reg.S_ON, 0)
+        self._sleep(0.05)
         self._configure_planner(
             axis_id,
             mode=3,

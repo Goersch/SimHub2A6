@@ -51,12 +51,30 @@ class A6Driver:
             return
 
         self._connected = False
+        first_error = None
         try:
             for axis in range(1, self._modbus.slaves + 1):
-                self.write_reg(axis, reg.S_ON, 0)
+                try:
+                    self.write_reg(axis, reg.S_ON, 0)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    logger.exception(
+                        "Axis %s: could not disable servo during shutdown",
+                        axis,
+                    )
             time.sleep(0.5)
         finally:
-            self._modbus.disconnect()
+            try:
+                self._modbus.disconnect()
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                else:
+                    logger.exception("Modbus disconnect failed after servo shutdown")
+
+        if first_error is not None:
+            raise first_error
 
     def read_regs(self, axis: int, addr: int, qty: int = 1):
         return self._modbus.read_regs(axis, addr, qty)

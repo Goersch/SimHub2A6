@@ -301,3 +301,25 @@ def grease(axisFrom: int, axisTo: int, status: int):
             logger.info("Stop axes %s-%s", axisFrom, axisTo)
             if greaseStopEvent is not None:
                 greaseStopEvent.set()
+
+
+def stop_and_wait(timeout: float | None = None) -> None:
+    """Request a running grease cycle to stop and wait for its final move."""
+    with greaseLock:
+        thread = greaseThread
+        stop_event = greaseStopEvent
+        active_range = (greaseAxisFrom, greaseAxisTo)
+
+    if thread is None:
+        return
+    if stop_event is not None:
+        logger.info("Stop axes %s-%s", *active_range)
+        stop_event.set()
+
+    wait_timeout = GREASE_MOVE_TIMEOUT_S + 1.0 if timeout is None else timeout
+    thread.join(wait_timeout)
+    if thread.is_alive():
+        raise TimeoutError(
+            "Grease movement did not stop within "
+            f"{wait_timeout:.1f}s"
+        )

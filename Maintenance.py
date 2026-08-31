@@ -66,6 +66,7 @@ class WartungDialog(tk.Toplevel):
     def __init__(self, parent, commands, is_simhub_connected, on_close=None):
         super().__init__(parent)
         self._commands = commands
+        self._commands.set_maintenance_active(True)
         self._is_simhub_connected = is_simhub_connected
         self._on_close = on_close
         self._closing = False
@@ -772,15 +773,33 @@ class WartungDialog(tk.Toplevel):
         if self._closing:
             return
         self._closing = True
-        if self._grease_active_range is not None:
-            Grease.grease(*self._grease_active_range, 0)
-        if self._status_after_id is not None:
-            try:
-                self.after_cancel(self._status_after_id)
-            except tk.TclError:
-                pass
-            self._status_after_id = None
-        if self.winfo_exists():
-            self.destroy()
-        if self._on_close is not None:
-            self._on_close()
+        try:
+            Grease.stop_and_wait()
+            self._commands.restore_planner_mode_after_maintenance()
+        except Exception as error:
+            self._closing = False
+            logger.exception("Could not restore planner mode after maintenance")
+            if self.winfo_exists():
+                self.status_label.configure(
+                    text=language_text("Maintenance", "planner_restore_failed")
+                )
+                messagebox.showerror(
+                    language_text("Maintenance", "title"),
+                    language_text(
+                        "Maintenance", "planner_restore_error", error=error
+                    ),
+                    parent=self,
+                )
+            return
+        else:
+            if self._status_after_id is not None:
+                try:
+                    self.after_cancel(self._status_after_id)
+                except tk.TclError:
+                    pass
+                self._status_after_id = None
+            if self.winfo_exists():
+                self.destroy()
+            self._commands.set_maintenance_active(False)
+            if self._on_close is not None:
+                self._on_close()

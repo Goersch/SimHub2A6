@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, call, patch
 
-from SimHub2A6 import SimHubCommands
+from SimHub2A6 import Maintenance, SimHubCommands
 from SimHub2A6.LIB.a6_motion import app_units_from_mm, rpm_from_mm_per_second
 from SimHub2A6.LIB.config import (
     CONFIG_PATH,
@@ -121,6 +121,44 @@ class ConfigAndMotionTests(unittest.TestCase):
         controller.planner_set_parameters.assert_not_called()
         simulator.set_target.assert_called_once()
 
+    def test_simhub_positions_are_blocked_during_and_until_after_maintenance(self):
+        controller = MagicMock()
+        state = SimHubCommands.SimHubRuntimeState(initialized=True)
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+            patch.object(SimHubCommands, "go_to_pos") as go_to_pos,
+        ):
+            SimHubCommands.set_maintenance_active(True)
+            self.assertFalse(SimHubCommands.handle_pos_2(1, 100_000))
+
+            SimHubCommands.set_maintenance_active(False)
+            self.assertFalse(SimHubCommands.handle_pos_2(1, 100_000))
+
+            self.assertTrue(SimHubCommands.arm_simhub_positions())
+            go_to_pos.return_value = True
+            self.assertTrue(SimHubCommands.handle_pos_2(1, 100_000))
+
+        self.assertEqual(go_to_pos.call_count, 1)
+
+    def test_simhub_positions_are_blocked_as_soon_as_shutdown_starts(self):
+        controller = MagicMock()
+        state = SimHubCommands.SimHubRuntimeState(initialized=False)
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+            patch.object(SimHubCommands, "go_to_pos") as go_to_pos,
+        ):
+            SimHubCommands.handle_end()
+
+            self.assertTrue(state.shutdown_active)
+            self.assertFalse(state.simhub_positions_armed)
+            self.assertFalse(SimHubCommands.handle_pos_2(1, 100_000))
+            self.assertFalse(SimHubCommands.arm_simhub_positions())
+
+        go_to_pos.assert_not_called()
+        controller.disconnect.assert_called_once_with()
+
     def test_grease_warning_and_alarm_thresholds_come_from_ini(self):
         self.assertEqual(GREASE_CONFIG.warning_after_operating_hours, 80.0)
         self.assertEqual(GREASE_CONFIG.alarm_after_operating_hours, 100.0)
@@ -185,7 +223,14 @@ class ConfigAndMotionTests(unittest.TestCase):
 
         self.assertEqual(
             controller.start_homing.call_args_list,
-            [call(2, ignore_status=True)],
+            [call(2, ignore_status=True, trigger=False)],
+        )
+        controller.trigger_homing.assert_called_once_with(0)
+        self.assertLess(
+            controller.mock_calls.index(
+                call.start_homing(2, ignore_status=True, trigger=False)
+            ),
+            controller.mock_calls.index(call.trigger_homing(0)),
         )
         controller.connect.assert_called_once_with(SimHubCommands.axisCount)
         wait_for_homing.assert_called_once_with(1, SimHubCommands.MAX_AXIS)
@@ -317,6 +362,69 @@ class ConfigAndMotionTests(unittest.TestCase):
         )
         self.assertEqual(state.maintenance_planner_axes, {1, 2, 3})
 
+    def test_leaving_maintenance_resumes_existing_planners(self):
+        controller = MagicMock()
+        current_positions = [10.0, -20.0, 30.0, -40.0, 50.0, -60.0, 70.0]
+        controller.read_position_mm.side_effect = current_positions
+        state = SimHubCommands.SimHubRuntimeState(
+            maintenance_planner_axes=set(range(1, 8))
+        )
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+        ):
+            SimHubCommands.restore_planner_mode_after_maintenance()
+
+        self.assertEqual(
+            controller.read_position_mm.call_args_list,
+            [call(axis) for axis in range(1, 8)],
+        )
+        self.assertEqual(
+            controller.set_servo_enabled.call_args_list,
+            [call(axis, True) for axis in range(1, 8)],
+        )
+        controller.planner_start.assert_not_called()
+        self.assertEqual(state.previous_positions, current_positions)
+        self.assertEqual(state.maintenance_planner_axes, set())
+
+    def test_leaving_maintenance_restarts_only_planners_stopped_by_homing(self):
+        controller = MagicMock()
+        controller.read_position_mm.side_effect = [10.0, -20.0, 30.0]
+        state = SimHubCommands.SimHubRuntimeState(
+            maintenance_planner_axes={1, 3}
+        )
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+            patch.object(SimHubCommands, "enabled_axes", return_value=[1, 2, 3]),
+        ):
+            SimHubCommands.restore_planner_mode_after_maintenance()
+
+        self.assertEqual(
+            controller.set_servo_enabled.call_args_list,
+            [call(1, True), call(3, True)],
+        )
+        controller.planner_start.assert_called_once_with(2, -20.0)
+        self.assertEqual(state.previous_positions[:3], [10.0, -20.0, 30.0])
+        self.assertEqual(state.maintenance_planner_axes, set())
+
+    def test_maintenance_dialog_restores_planners_before_it_closes(self):
+        dialog = MagicMock()
+        dialog._closing = False
+        dialog._commands = MagicMock()
+        dialog._status_after_id = None
+        dialog._on_close = MagicMock()
+        dialog.winfo_exists.return_value = True
+
+        with patch.object(Maintenance.Grease, "stop_and_wait") as stop_and_wait:
+            Maintenance.WartungDialog.close(dialog)
+
+        stop_and_wait.assert_called_once_with()
+        dialog._commands.restore_planner_mode_after_maintenance.assert_called_once_with()
+        dialog._commands.set_maintenance_active.assert_called_once_with(False)
+        dialog.destroy.assert_called_once_with()
+        dialog._on_close.assert_called_once_with()
+
     def test_front_and_rear_maintenance_moves_use_100_rpm(self):
         controller = MagicMock()
         controller.read_position_mm.return_value = 0.0
@@ -360,12 +468,21 @@ class ConfigAndMotionTests(unittest.TestCase):
         self.assertEqual(
             controller.start_homing.call_args_list,
             [
-                call(4, ignore_status=True),
-                call(5, ignore_status=True),
-                call(6, ignore_status=True),
-                call(7, ignore_status=True),
+                call(4, ignore_status=True, trigger=False),
+                call(5, ignore_status=True, trigger=False),
+                call(6, ignore_status=True, trigger=False),
+                call(7, ignore_status=True, trigger=False),
             ],
         )
+        controller.trigger_homing.assert_called_once_with(0)
+        trigger_index = controller.mock_calls.index(call.trigger_homing(0))
+        for axis in range(4, 8):
+            self.assertLess(
+                controller.mock_calls.index(
+                    call.start_homing(axis, ignore_status=True, trigger=False)
+                ),
+                trigger_index,
+            )
         wait_for_homing.assert_called_once_with(4, 7)
         self.assertEqual(
             state.previous_positions[3:7],
@@ -398,7 +515,12 @@ class ConfigAndMotionTests(unittest.TestCase):
             SimHubCommands.home_middle_axis_for_maintenance()
 
         controller.planner_stop.assert_called_once_with(2)
-        controller.start_homing.assert_called_once_with(2, ignore_status=True)
+        controller.start_homing.assert_called_once_with(
+            2,
+            ignore_status=True,
+            trigger=True,
+        )
+        controller.trigger_homing.assert_not_called()
         wait_for_homing.assert_called_once_with(2, 2)
         self.assertEqual(state.previous_positions[1], RIG_CONFIG.limits.homing_mm)
 
@@ -418,6 +540,69 @@ class ConfigAndMotionTests(unittest.TestCase):
                 SimHubCommands.handle_end()
 
         controller.disconnect.assert_called_once_with()
+        self.assertFalse(state.initialized)
+
+    def test_shutdown_centers_all_axes_before_stopping_planners(self):
+        controller = MagicMock()
+        state = SimHubCommands.SimHubRuntimeState(initialized=True)
+        workflow = MagicMock()
+        controller.planner_stop.side_effect = workflow.planner_stop
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+            patch.object(
+                SimHubCommands.time,
+                "sleep",
+                side_effect=workflow.sleep,
+            ),
+            patch.object(
+                SimHubCommands,
+                "center_all_axes",
+                side_effect=workflow.center_all_axes,
+            ),
+            patch.object(SimHubCommands, "wait_for_homing"),
+        ):
+            SimHubCommands.handle_end()
+
+        self.assertEqual(workflow.mock_calls[0], call.center_all_axes())
+        self.assertEqual(
+            workflow.mock_calls[1],
+            call.sleep(SimHubCommands.SHUTDOWN_CENTER_SETTLE_S),
+        )
+        self.assertEqual(
+            workflow.mock_calls[2:9],
+            [call.planner_stop(axis) for axis in range(1, 8)],
+        )
+        self.assertFalse(state.initialized)
+        controller.disconnect.assert_called_once_with()
+
+    def test_shutdown_prepares_hub_axes_before_shared_homing_trigger(self):
+        controller = MagicMock()
+        state = SimHubCommands.SimHubRuntimeState(initialized=True)
+        with (
+            patch.object(SimHubCommands, "motion_controller", controller),
+            patch.object(SimHubCommands, "runtime_state", state),
+            patch.object(SimHubCommands.time, "sleep") as sleep,
+            patch.object(SimHubCommands, "center_all_axes"),
+            patch.object(SimHubCommands, "wait_for_homing") as wait_for_homing,
+        ):
+            SimHubCommands.handle_end()
+
+        self.assertEqual(
+            controller.start_homing.call_args_list,
+            [
+                call(
+                    axis,
+                    ignore_status=True,
+                    initialize=False,
+                    trigger=False,
+                )
+                for axis in range(4, 8)
+            ],
+        )
+        sleep.assert_called_once_with(SimHubCommands.SHUTDOWN_CENTER_SETTLE_S)
+        controller.trigger_homing.assert_called_once_with(0)
+        wait_for_homing.assert_called_once_with(4, 7)
 
     def test_shutdown_skips_motion_when_initialization_failed(self):
         controller = MagicMock()

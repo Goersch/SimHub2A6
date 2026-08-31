@@ -1,5 +1,6 @@
 import unittest
 from typing import cast
+from unittest.mock import MagicMock, call
 
 from SimHub2A6.LIB import a6_registers as reg
 from SimHub2A6.LIB.a6_driver import A6Driver
@@ -77,6 +78,10 @@ class A6MotionControllerTests(unittest.TestCase):
     def test_planner_can_start_at_the_current_position(self):
         self.controller.planner_start(4, -30.0)
 
+        self.assertEqual(
+            self.driver.register_writes[0][:3],
+            (4, reg.S_ON, 0),
+        )
         position_writes = [
             write for write in self.driver.uint32_writes if write[1] == reg.C11_06
         ]
@@ -89,6 +94,16 @@ class A6MotionControllerTests(unittest.TestCase):
             [
                 (0, reg.POS_TRIG, 1, False, False),
                 (0, reg.POS_TRIG, 0, False, False),
+            ],
+        )
+
+    def test_broadcast_homing_trigger_never_waits_for_crc(self):
+        self.controller.trigger_homing(0)
+        self.assertEqual(
+            self.driver.register_writes,
+            [
+                (0, reg.HOM_TRIG, 1, False, False),
+                (0, reg.HOM_TRIG, 0, False, False),
             ],
         )
 
@@ -114,6 +129,25 @@ class A6MotionControllerTests(unittest.TestCase):
                 (4, reg.S_ON, 0, False, True),
             ],
         )
+
+    def test_disconnect_attempts_to_disable_every_servo_after_one_failure(self):
+        modbus = MagicMock()
+        modbus.slaves = 3
+        modbus.write_register.side_effect = [None, OSError("axis 2 failed"), None]
+        driver = A6Driver(modbus)
+        driver._connected = True
+
+        with self.assertRaisesRegex(OSError, "axis 2 failed"):
+            driver.disconnect()
+
+        self.assertEqual(
+            modbus.write_register.call_args_list,
+            [
+                call(axis, reg.S_ON, 0, False, True)
+                for axis in range(1, 4)
+            ],
+        )
+        modbus.disconnect.assert_called_once_with()
 
     def test_homing_done_uses_do5_active_low_with_positive_logic(self):
         class FakeModbus:
