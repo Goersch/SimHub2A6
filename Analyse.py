@@ -499,6 +499,8 @@ class AnalyseDialog(tk.Toplevel):
         self._playback_pause_started = None
         self._playback_pause_duration = 0.0
         self._playback_samples = []
+        self._playback_start_index = 0
+        self._playback_axes = tuple(range(1, 8))
         self._parent_background = parent.cget("bg")
         analyseActive = True
 
@@ -591,7 +593,11 @@ class AnalyseDialog(tk.Toplevel):
         self.stop_button = tk.Button(
             playback_frame, text="■", command=self._stop, width=3,
         )
-        for button in (self.play_button, self.pause_button, self.stop_button):
+        self.seek_buttons = []
+        for label, seconds in (("-60 s", -60), ("-10 s", -10), ("+10 s", 10), ("+60 s", 60)):
+            button = tk.Button(playback_frame, text=label, command=lambda value=seconds: self._seek(value), width=5)
+            self.seek_buttons.append(button)
+        for button in (self.play_button, self.pause_button, self.stop_button, *self.seek_buttons):
             button.pack(side=tk.LEFT, padx=(0, 8))
 
         signal_frame = tk.Frame(detail_frame)
@@ -681,6 +687,7 @@ class AnalyseDialog(tk.Toplevel):
             return
         self.chart.set_data(samples)
         self._playback_samples = playback_samples
+        self._playback_start_index = 0
         self.chart.set_playback_timestamp(None)
         self._update_playback_buttons()
 
@@ -688,6 +695,29 @@ class AnalyseDialog(tk.Toplevel):
         self.play_button.configure(state=tk.NORMAL if self._playback_state in ("stopped", "paused") and self._playback_samples else tk.DISABLED)
         self.pause_button.configure(state=tk.NORMAL if self._playback_state == "playing" else tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL if self._playback_state != "stopped" else tk.DISABLED)
+        seek_state = tk.NORMAL if self._playback_state in ("stopped", "paused") and self._playback_samples else tk.DISABLED
+        for button in self.seek_buttons:
+            button.configure(state=seek_state)
+
+    def _seek(self, seconds):
+        if self._playback_state not in ("stopped", "paused") or not self._playback_samples:
+            return
+        was_paused = self._playback_state == "paused"
+        if was_paused:
+            # Abort the old worker at its current sample. The next Play
+            # starts from the newly selected position.
+            self._playback_stop.set()
+            self._playback_pause.clear()
+            self._playback_state = "stopped"
+        current = self._playback_samples[self._playback_start_index][0]
+        target = current + seconds
+        if seconds < 0:
+            index = max((i for i, sample in enumerate(self._playback_samples) if sample[0] <= target), default=0)
+        else:
+            index = next((i for i, sample in enumerate(self._playback_samples) if sample[0] >= target), len(self._playback_samples) - 1)
+        self._playback_start_index = index
+        self.chart.set_playback_timestamp(self._playback_samples[index][0])
+        self._update_playback_buttons()
 
     def _set_playback_background(self, active):
         try:
@@ -711,6 +741,11 @@ class AnalyseDialog(tk.Toplevel):
         self._playback_pause.clear()
         self._playback_pause_duration = 0.0
         self._playback_pause_started = None
+        selected_axes = [selected.get() for selected in self.axis_selected]
+        hub_selected = all(selected_axes[index] for index in HUB_AXIS_INDEXES)
+        self._playback_axes = tuple(
+            axis for axis in range(1, 4) if selected_axes[axis - 1]
+        ) + (tuple(range(4, 8)) if hub_selected else ())
         self._playback_state = "playing"
         self._set_playback_background(True)
         try:
@@ -752,9 +787,9 @@ class AnalyseDialog(tk.Toplevel):
         from .LIB.config import RIG_CONFIG
         try:
             shcmd.arm_simhub_positions()
-            recording_start = self._playback_samples[0][0]
+            recording_start = self._playback_samples[self._playback_start_index][0]
             playback_start = time.perf_counter()
-            for timestamp, signals in self._playback_samples:
+            for timestamp, signals in self._playback_samples[self._playback_start_index:]:
                 if self._playback_stop.is_set():
                     return
                 while self._playback_pause.is_set() and not self._playback_stop.is_set():
@@ -764,9 +799,14 @@ class AnalyseDialog(tk.Toplevel):
                 if delay > 0 and self._playback_stop.wait(delay):
                     return
                 values = []
-                for axis, mm in enumerate(signals[SIGNAL_TARGET], start=1):
+                for axis in self._playback_axes:
+                    mm = signals[SIGNAL_TARGET][axis - 1]
                     cfg = RIG_CONFIG.axis(axis)
-                    raw = round((mm - cfg.zero_offset_mm - shcmd.levelingOffset[axis - 1] + cfg.stroke_mm / 2) / cfg.stroke_mm * shcmd.maxPos)
+                    # TargetPosition in the CSV is already stored relative
+                    # to zero_offset_mm.  Add the offset back through the
+                    # inverse conversion only once; subtract leveling offset
+                    # because it is included in the recorded target.
+                    raw = round((mm - shcmd.levelingOffset[axis - 1] + cfg.stroke_mm / 2) / cfg.stroke_mm * shcmd.maxPos)
                     values.append(max(0, min(shcmd.maxPos, raw)))
                 for axis, value in enumerate(values, start=1):
                     shcmd.handle_pos_2(axis, value, trigger=False)

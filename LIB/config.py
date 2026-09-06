@@ -382,7 +382,7 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
             ),
             sender_cycle_s=parser.getfloat("simhub", "sender_cycle_s"),
             simulation_interval_s=parser.getfloat(
-                "simhub", "simulation_interval_s"
+                "simulation", "simulation_interval_s"
             ),
             position_count=parser.getint("simhub", "position_count"),
             position_min=parser.getint("simhub", "position_min"),

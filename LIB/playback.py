@@ -51,7 +51,7 @@ class PlaybackController:
                 if self.stop_event.wait(max(0.0, deadline - time.perf_counter())): return
                 for axis, mm in enumerate(signals["target"], 1):
                     cfg = RIG_CONFIG.axis(axis)
-                    raw = round((mm - cfg.zero_offset_mm - shcmd.levelingOffset[axis-1] + cfg.stroke_mm/2) / cfg.stroke_mm * shcmd.maxPos)
+                    raw = round((mm - shcmd.levelingOffset[axis-1] + cfg.stroke_mm/2) / cfg.stroke_mm * shcmd.maxPos)
                     shcmd.handle_pos_2(axis, max(0, min(shcmd.maxPos, raw)), trigger=False)
                 shcmd.motion_controller.planner_trigger(0, log_hex=False, check_crc=True)
                 if self.on_position: self.on_position(timestamp)
