@@ -3,6 +3,7 @@
 import csv
 import math
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -149,12 +150,15 @@ def _parse_recording_row(row):
     )
 
 
-def load_recording(file_path, max_points=6000):
+def load_recording(file_path, max_points: int | None = 6000):
     try:
         estimated_rows = max(1, file_path.stat().st_size // 70)
     except OSError:
-        estimated_rows = max_points
-    sample_step = max(1, math.ceil(estimated_rows / max_points))
+        estimated_rows = max_points if max_points is not None else 6000
+    if max_points is None:
+        sample_step = 1
+    else:
+        sample_step = max(1, math.ceil(estimated_rows / max_points))
 
     samples = []
     last_row = None
@@ -176,7 +180,7 @@ def load_recording(file_path, max_points=6000):
             last_sample = None
         if last_sample is not None and (not samples or samples[-1] != last_sample):
             samples.append(last_sample)
-    if len(samples) > max_points:
+    if max_points is not None and len(samples) > max_points:
         final_sample = samples[-1]
         reduction_step = math.ceil(len(samples) / max_points)
         samples = samples[::reduction_step]
@@ -211,6 +215,7 @@ class SignalChart(tk.Canvas):
         self._plot_rect: tuple[float, float, float, float] | None = None
         self._drag_start: float | None = None
         self._zoom_rectangle: int | None = None
+        self.playback_timestamp = None
         self.bind("<Configure>", self._schedule_redraw)
         self.bind("<ButtonPress-1>", self._start_zoom)
         self.bind("<B1-Motion>", self._drag_zoom)
@@ -234,6 +239,10 @@ class SignalChart(tk.Canvas):
 
     def set_selected_signals(self, selected_signals):
         self.selected_signals = dict(selected_signals)
+        self.draw()
+
+    def set_playback_timestamp(self, timestamp):
+        self.playback_timestamp = timestamp
         self.draw()
 
     def _schedule_redraw(self, _event=None):
@@ -470,6 +479,10 @@ class SignalChart(tk.Canvas):
                         dash=style["dash"],
                     )
 
+        if self.playback_timestamp is not None and start_time <= self.playback_timestamp <= end_time:
+            x = plot_left + (self.playback_timestamp - start_time) / time_span * plot_width
+            self.create_line(x, plot_top, x, plot_bottom, fill="#555555", width=1)
+
 
 class AnalyseDialog(tk.Toplevel):
     def __init__(self, parent, on_close=None):
@@ -479,6 +492,14 @@ class AnalyseDialog(tk.Toplevel):
         self._on_close = on_close
         self._closing = False
         self._load_generation = 0
+        self._playback_state = "stopped"
+        self._playback_thread = None
+        self._playback_stop = threading.Event()
+        self._playback_pause = threading.Event()
+        self._playback_pause_started = None
+        self._playback_pause_duration = 0.0
+        self._playback_samples = []
+        self._parent_background = parent.cget("bg")
         analyseActive = True
 
         self.title(language_text("Analysis", "title"))
@@ -559,6 +580,20 @@ class AnalyseDialog(tk.Toplevel):
         self.chart = SignalChart(detail_frame)
         self.chart.grid(row=2, column=0, sticky="nsew", pady=(8, 12))
 
+        playback_frame = tk.Frame(detail_frame)
+        playback_frame.grid(row=4, column=0, sticky="w", pady=(0, 8))
+        self.play_button = tk.Button(
+            playback_frame, text="▶", command=self._play, width=3,
+        )
+        self.pause_button = tk.Button(
+            playback_frame, text="⏸", command=self._pause, width=3,
+        )
+        self.stop_button = tk.Button(
+            playback_frame, text="■", command=self._stop, width=3,
+        )
+        for button in (self.play_button, self.pause_button, self.stop_button):
+            button.pack(side=tk.LEFT, padx=(0, 8))
+
         signal_frame = tk.Frame(detail_frame)
         signal_frame.grid(row=3, column=0, sticky="ew")
         self.signal_selected = {
@@ -591,6 +626,7 @@ class AnalyseDialog(tk.Toplevel):
             if signal_name == SIGNAL_GROUND_DEVIATION:
                 self.ground_deviation_checkbutton = checkbutton
         self._update_ground_deviation_availability()
+        self._update_playback_buttons()
 
         self.file_list.bind("<<ListboxSelect>>", self._file_selected)
         if self.simhub_data_files:
@@ -619,19 +655,24 @@ class AnalyseDialog(tk.Toplevel):
     def _load_recording_worker(self, file_path, generation):
         try:
             samples = load_recording(file_path)
+            playback_samples = load_recording(file_path, max_points=None)
             error = None
         except Exception as load_error:
             samples = []
+            playback_samples = []
             error = str(load_error)
 
         if self._closing:
             return
         try:
-            self.after(0, self._apply_recording, file_path, generation, samples, error)
+            self.after(
+                0, self._apply_recording, file_path, generation,
+                samples, playback_samples, error,
+            )
         except tk.TclError:
             pass
 
-    def _apply_recording(self, file_path, generation, samples, error):
+    def _apply_recording(self, file_path, generation, samples, playback_samples, error):
         if self._closing or generation != self._load_generation:
             return
         if error is not None:
@@ -639,6 +680,103 @@ class AnalyseDialog(tk.Toplevel):
             self.chart.set_message(language_text("Analysis", "file_load_error"))
             return
         self.chart.set_data(samples)
+        self._playback_samples = playback_samples
+        self.chart.set_playback_timestamp(None)
+        self._update_playback_buttons()
+
+    def _update_playback_buttons(self):
+        self.play_button.configure(state=tk.NORMAL if self._playback_state in ("stopped", "paused") and self._playback_samples else tk.DISABLED)
+        self.pause_button.configure(state=tk.NORMAL if self._playback_state == "playing" else tk.DISABLED)
+        self.stop_button.configure(state=tk.NORMAL if self._playback_state != "stopped" else tk.DISABLED)
+
+    def _set_playback_background(self, active):
+        try:
+            background = "#FFF2A8" if active else self._parent_background
+            self.master.configure({"background": background})
+        except tk.TclError:
+            pass
+
+    def _play(self):
+        if self._playback_state == "paused":
+            if self._playback_pause_started is not None:
+                self._playback_pause_duration += time.perf_counter() - self._playback_pause_started
+                self._playback_pause_started = None
+            self._playback_pause.clear()
+            self._playback_state = "playing"
+            self._update_playback_buttons()
+            return
+        if not self._playback_samples or self._playback_state == "playing":
+            return
+        self._playback_stop.clear()
+        self._playback_pause.clear()
+        self._playback_pause_duration = 0.0
+        self._playback_pause_started = None
+        self._playback_state = "playing"
+        self._set_playback_background(True)
+        try:
+            from . import SimHub2SimRig
+            SimHub2SimRig.stop_simhub_recording()
+        except Exception:
+            logger.exception("Could not disable recording for playback")
+        self._update_playback_buttons()
+        self._playback_thread = threading.Thread(target=self._playback_worker, daemon=True)
+        self._playback_thread.start()
+
+    def _pause(self):
+        if self._playback_state == "playing":
+            self._playback_state = "paused"
+            self._playback_pause_started = time.perf_counter()
+            self._playback_pause.set()
+            self._update_playback_buttons()
+
+    def _stop(self):
+        if self._playback_state == "stopped":
+            return
+        self._playback_stop.set()
+        self._playback_pause.clear()
+        self._playback_state = "stopped"
+        self.chart.set_playback_timestamp(None)
+        self._set_playback_background(False)
+        self._update_playback_buttons()
+        threading.Thread(target=self._center_after_playback, daemon=True).start()
+
+    def _center_after_playback(self):
+        try:
+            from . import SimHubCommands as shcmd
+            shcmd.center_all_axes()
+        except Exception:
+            logger.exception("Could not center axes after playback")
+
+    def _playback_worker(self):
+        from . import SimHubCommands as shcmd
+        from .LIB.config import RIG_CONFIG
+        try:
+            shcmd.arm_simhub_positions()
+            recording_start = self._playback_samples[0][0]
+            playback_start = time.perf_counter()
+            for timestamp, signals in self._playback_samples:
+                if self._playback_stop.is_set():
+                    return
+                while self._playback_pause.is_set() and not self._playback_stop.is_set():
+                    time.sleep(0.05)
+                target_time = playback_start + (timestamp - recording_start) + self._playback_pause_duration
+                delay = target_time - time.perf_counter()
+                if delay > 0 and self._playback_stop.wait(delay):
+                    return
+                values = []
+                for axis, mm in enumerate(signals[SIGNAL_TARGET], start=1):
+                    cfg = RIG_CONFIG.axis(axis)
+                    raw = round((mm - cfg.zero_offset_mm - shcmd.levelingOffset[axis - 1] + cfg.stroke_mm / 2) / cfg.stroke_mm * shcmd.maxPos)
+                    values.append(max(0, min(shcmd.maxPos, raw)))
+                for axis, value in enumerate(values, start=1):
+                    shcmd.handle_pos_2(axis, value, trigger=False)
+                shcmd.motion_controller.planner_trigger(0, log_hex=False, check_crc=True)
+                self.after(0, self.chart.set_playback_timestamp, timestamp)
+        except Exception:
+            logger.exception("Playback failed")
+        finally:
+            if not self._playback_stop.is_set():
+                self.after(0, self._stop)
 
     def _update_chart_axes(self):
         self.chart.set_selected_axes(
@@ -699,6 +837,9 @@ class AnalyseDialog(tk.Toplevel):
         if self._closing:
             return
         self._closing = True
+        self._playback_stop.set()
+        self._playback_pause.clear()
+        self._set_playback_background(False)
         self._load_generation += 1
         analyseActive = False
 

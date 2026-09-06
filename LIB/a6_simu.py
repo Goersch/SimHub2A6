@@ -12,7 +12,6 @@ from .logging_config import get_logger
 from .simrig_load_calibration import get_active_center_of_gravity
 
 logger = get_logger("a6.simu")
-SIMULATION_INTERVAL_S = 0.01
 SIMHUB_DATA_DIR = Path(__file__).resolve().parent.parent / "SimHubData"
 SIMHUB_DATA_MAX_AGE = timedelta(days=SIMHUB_CONFIG.data_retention_days)
 HUB_AXIS_IDS = (4, 5, 6, 7)
@@ -182,7 +181,9 @@ class AxisState:
 class A6Simulator:
     """Thread-safe trapezoidal motion simulation for all configured axes."""
 
-    def __init__(self, axis_count=None, interval_s=SIMULATION_INTERVAL_S):
+    def __init__(self, axis_count=None, interval_s=None):
+        if interval_s is None:
+            interval_s = SIMHUB_CONFIG.simulation_interval_s
         self.axis_count = axis_count or RIG_CONFIG.axis_count
         self.interval_s = float(interval_s)
         center_raw = (SIMHUB_CONFIG.position_min + SIMHUB_CONFIG.position_max) // 2

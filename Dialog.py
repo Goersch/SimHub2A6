@@ -813,6 +813,13 @@ class Dialog(tk.Tk):
             error_state_label,
             _,
         ) = self.motor_value_labels[axis - 1]
+        # A worker callback can arrive after the motor panel was destroyed
+        # during application shutdown.  The toplevel may still exist briefly,
+        # so checking only self.winfo_exists() is not sufficient here.
+        if not all(label.winfo_exists() for label in (
+            leveling_offset_label, load_rate_label, error_state_label
+        )):
+            return
         leveling_offset_text = "" if axis in (1, 2, 3) else self._format_leveling_offset(leveling_offset)
         leveling_offset_label.configure(text=leveling_offset_text)
         load_rate_label.configure(text=self._format_load_rate(load_rate))

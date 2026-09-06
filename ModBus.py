@@ -28,7 +28,7 @@ SERIAL_RESPONSE_POLL_DELAY_S = MODBUS_CONFIG.response_poll_delay_s
 QUEUE_DRAIN_TIMEOUT_S = MODBUS_CONFIG.queue_drain_timeout_s
 TASK_WAIT_TIMEOUT_S = MODBUS_CONFIG.task_wait_timeout_s
 WORKER_JOIN_TIMEOUT_S = MODBUS_CONFIG.worker_join_timeout_s
-PORT_OPEN_DELAY_S = 0.5
+PORT_OPEN_DELAY_S = 1.0  # Delay between opening multiple serial ports to avoid noise on the bus.
 
 # Function and device-specific error codes
 FC_READ = 0x03

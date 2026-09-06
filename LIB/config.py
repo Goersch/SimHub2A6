@@ -99,6 +99,7 @@ class SimHubConfig:
     udp_port: int
     disconnect_timeout_s: float
     sender_cycle_s: float
+    simulation_interval_s: float
     position_count: int
     position_min: int
     position_max: int
@@ -380,6 +381,9 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
                 "simhub", "disconnect_timeout_s"
             ),
             sender_cycle_s=parser.getfloat("simhub", "sender_cycle_s"),
+            simulation_interval_s=parser.getfloat(
+                "simhub", "simulation_interval_s"
+            ),
             position_count=parser.getint("simhub", "position_count"),
             position_min=parser.getint("simhub", "position_min"),
             position_max=parser.getint("simhub", "position_max"),
@@ -593,6 +597,7 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
         "inter_frame_delay_s": modbus_config.inter_frame_delay_s,
         "operation_timeout_s": a6_config.operation_timeout_s,
         "sender_cycle_s": simhub_config.sender_cycle_s,
+        "simulation_interval_s": simhub_config.simulation_interval_s,
         "actual_position_poll_interval_s": (
             control_config.actual_position_poll_interval_s
         ),
