@@ -1,0 +1,42 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "SimHub2SimRigHMI: Start without debugger",
+            "type": "process",
+            "dependsOn": "SimHub2SimRig: Release build",
+            "command": "${workspaceFolder}/CSharp/bin/SimHub2SimRigHMI.exe",
+            "args": ["--root", "${workspaceFolder}"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "SimHub2SimRig: Debug build",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/CSharp/build.ps1",
+                "-Configuration", "Debug"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": "$msCompile",
+            "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "SimHub2SimRig: Release build",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/CSharp/build.ps1",
+                "-Configuration", "Release"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": "$msCompile",
+            "group": "build"
+        }
+    ]
+}

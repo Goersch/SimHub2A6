@@ -1,0 +1,9 @@
+{
+    "folders": [ { "path": "." } ],
+    "settings": {
+        "dotnet.defaultSolution": "CSharp/SimHub2SimRig.sln",
+        "dotnet.preferCSharpExtension": true,
+        "dotnet.projects.enableFileBasedPrograms": false,
+        "dotnet.fileBasedApps.enableAutomaticDiscovery": false
+    }
+}

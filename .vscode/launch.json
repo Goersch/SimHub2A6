@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SimHub2SimRigHMI",
+            "type": "clr",
+            "request": "launch",
+            "preLaunchTask": "SimHub2SimRig: Debug build",
+            "program": "${workspaceFolder}/CSharp/bin/SimHub2SimRigHMI.exe",
+            "args": ["--root", "${workspaceFolder}"],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "justMyCode": true
+        },
+        {
+            "name": "SimHub2SimRigCom (Hardware)",
+            "type": "clr",
+            "request": "launch",
+            "preLaunchTask": "SimHub2SimRig: Debug build",
+            "program": "${workspaceFolder}/CSharp/bin/SimHub2SimRigCom.exe",
+            "args": ["--root", "${workspaceFolder}"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "stopAtEntry": false,
+            "justMyCode": true
+        }
+    ]
+}

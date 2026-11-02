@@ -16,11 +16,17 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: |
+            Python/requirements.txt
+            Python/requirements-dev.txt
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+        run: python -m pip install -r Python/requirements.txt -r Python/requirements-dev.txt
       - name: Run tests
-        run: python -m pytest
+        run: python CSharp/Tests/run_python_tests.py
+      - name: Build C# applications and compare Python Modbus telegrams
+        shell: powershell
+        run: ./CSharp/build.ps1 -Test
       - name: Run Ruff
-        run: python -m ruff check . tests
+        run: python -m ruff check --config Python/pyproject.toml Python CSharp/Tests
       - name: Run Pyright
-        run: python -m pyright .
+        run: python -m pyright --project Python/pyproject.toml

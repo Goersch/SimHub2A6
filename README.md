@@ -1,4 +1,33 @@
-# SimHub2A6
+# SimHub2SimRig
+
+Die aktuelle Anwendung ist nach C# portiert und in zwei Programme aufgeteilt:
+
+- **SimHub2SimRigHMI** enthält die Dialoge und Lichtbedienung.
+- **SimHub2SimRigCom** übernimmt die gesamte Kommunikation, Bewegung, Aufzeichnung,
+  Playback, Wartung, Schmierung und Leveling.
+
+Bauen unter Windows mit .NET Framework 4.8:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\CSharp\build.ps1
+```
+
+Anschließend `CSharp/bin/SimHub2SimRigCom.exe` und
+`CSharp/bin/SimHub2SimRigHMI.exe` starten. Das HMI kommuniziert ausschließlich über
+eine lokale Named Pipe mit Com; für den Betrieb ist Python nicht erforderlich.
+
+Startoptionen, Architektur, bestehende Datenformate, Simulation und Tests:
+**[C#-Dokumentation](CSharp/README.md)**.
+
+Die Python-Version mit `LIB`, `tools`, `analysis`, `tests` und ihren
+Abhängigkeitsdateien liegt vollständig unter **[Python](Python/README.md)**.
+`INI`, `LOG` und `SimHubData` werden von beiden Versionen gemeinsam verwendet
+und bleiben im Hauptverzeichnis.
+
+Die folgenden Hardware- und SimHub-Hinweise gelten weiterhin. Die beschriebenen
+Python-Startbefehle gehören zur für Regressionstests beibehaltenen Referenzversion.
+
+## Python reference and hardware documentation
 
 SimHub2A6 is a Windows bridge between the SimHub Motion Addon and a custom
 seven-axis motion rig built with **StepperOnline A6 750 W servo motors and
@@ -117,25 +146,23 @@ cd SimHub2A6
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r Python/requirements.txt
 ```
 
 Edit `INI/SimHub2SimRig.ini` before the first run. At minimum, verify every
 `port`, `axes`, geometry, spindle pitch, stroke, zero offset, speed, and
 acceleration/deceleration value.
 
-Run the application from the repository's parent directory because it is a
-Python package:
+Run the Python application from the repository directory:
 
 ```powershell
-cd ..
-.\SimHub2A6\.venv\Scripts\python.exe -m SimHub2A6.SimHub2SimRig
+.\.venv\Scripts\python.exe -m Python.SimHub2SimRig
 ```
 
 To request a clean shutdown from another terminal:
 
 ```powershell
-.\SimHub2A6\.venv\Scripts\python.exe -m SimHub2A6.ShutDown
+.\.venv\Scripts\python.exe -m Python.ShutDown
 ```
 
 ## SimHub configuration
@@ -204,14 +231,14 @@ profile:
 Close SimHub first. Run a preview from the repository directory:
 
 ```powershell
-python tools\update_simhub_motion_config.py
+python Python\tools\update_simhub_motion_config.py
 ```
 
 If the detected device, profile, game, and changes are correct, open PowerShell
 as Administrator and apply them:
 
 ```powershell
-python tools\update_simhub_motion_config.py --apply
+python Python\tools\update_simhub_motion_config.py --apply
 ```
 
 The helper creates a timestamped backup next to SimHub's
@@ -264,10 +291,10 @@ the included shutdown client and returns shutdown status datagrams.
 ## Development
 
 ```powershell
-python -m pip install -r requirements-dev.txt
-python -m pytest
-ruff check .
-pyright
+python -m pip install -r Python/requirements-dev.txt
+python -m pytest Python/tests
+python -m ruff check --config Python/pyproject.toml Python CSharp/Tests
+python -m pyright --project Python/pyproject.toml
 ```
 
 GitHub Actions runs the test suite on every push and pull request. Additional

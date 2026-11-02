@@ -10,7 +10,9 @@ __pycache__/
 venv/
 
 # Editors and local agent configuration
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
 .idea/
 .agents/
 .codex/
@@ -24,8 +26,8 @@ INI/simrig_load_values.json
 INI/room_light.ini
 
 # Generated analysis reports
-analysis/latest_position_report/
-analysis/simhub_motion_report/
+Python/analysis/latest_position_report/
+Python/analysis/simhub_motion_report/
 
 # Third-party documentation (download from the manufacturer)
 A6-RS_Series_Servo_Drive_Manual.pdf
@@ -41,3 +43,17 @@ Desktop.ini
 .gh-cli.zip
 .publish-git/
 .publish-work/
+
+# C# build and isolated validation output
+CSharp/bin/
+CSharp/dist/
+CSharp/fixes/
+CSharp/Tests/bin/
+CSharp/**/obj/
+CSharp/Tests/reference.json
+CSharp/Tests/test-results.json
+CSharp/Tests/console-test-results.json
+CSharp/Tests/console-latest.log
+CSharp/Tests/work/
+CSharp/Tests/screenshots/
+CSharp/Tests/latest-test.log
