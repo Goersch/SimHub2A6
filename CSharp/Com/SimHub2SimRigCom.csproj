@@ -1,10 +1,10 @@
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <ProjectGuid>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69802}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <AssemblyName>SimHub2SimRigCom</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
     <OutputPath>..\bin\</OutputPath>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>5</LangVersion>
@@ -18,5 +18,4 @@
     <ProjectReference Include="..\Shared\SimHub2SimRig.Shared.csproj"><Project>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69801}</Project><Name>SimHub2SimRig.Shared</Name></ProjectReference>
     <Compile Include="Engine.cs" /><Compile Include="Leveler.cs" /><Compile Include="Modbus.cs" /><Compile Include="MotionController.cs" /><Compile Include="Playback.cs" /><Compile Include="Program.cs" /><Compile Include="Recordings.cs" /><Compile Include="Simulation.cs" /><Compile Include="ConsoleLifetime.cs" />
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

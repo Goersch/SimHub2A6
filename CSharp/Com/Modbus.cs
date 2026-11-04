@@ -25,6 +25,8 @@ namespace SimHub2SimRig.Com
     public static class Log
     {
         static readonly object gate = new object();
+        static readonly Queue<string> recent = new Queue<string>();
+        public static string[] Recent() { lock (gate) return recent.ToArray(); }
         public static string DirectoryPath;
         public static bool ConsoleEnabled = true;
         public static void Write(string message)
@@ -32,6 +34,7 @@ namespace SimHub2SimRig.Com
             lock (gate)
             {
                 string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message;
+                recent.Enqueue(line); while (recent.Count > 3) recent.Dequeue();
                 if (ConsoleEnabled) SafeConsole.WriteLine(line);
                 if (DirectoryPath != null)
                     try { Directory.CreateDirectory(DirectoryPath); File.AppendAllText(Path.Combine(DirectoryPath, "simhub2simrig-com.log"), line + Environment.NewLine); }
@@ -153,7 +156,7 @@ namespace SimHub2SimRig.Com
         bool? highFirst;
         public bool Connected { get { lock (gate) return buses.Count != 0; } }
         public Modbus(Configuration config) { this.config = config; }
-        public void Connect(Func<BusConfig, IWire> factory)
+        public void Connect(Func<BusConfig, IWire> factory, Action<BusConfig, Exception> retryOpen = null)
         {
             lock (gate)
             {
@@ -163,12 +166,28 @@ namespace SimHub2SimRig.Com
                     foreach (BusConfig bc in config.Buses)
                     {
                         if (factory == null && buses.Count > 0) Timing.Sleep(1);
-                        var b = new Bus { Wire = factory == null ? new SerialWire(bc, config) : factory(bc) };
+                        var b = new Bus { Wire = OpenWire(bc, factory, retryOpen) };
                         buses.Add(b); foreach (int axis in bc.Axes) routes.Add(axis, b); b.Start();
                     }
                     highFirst = null;
                 }
                 catch { Dispose(); throw; }
+            }
+        }
+        IWire OpenWire(BusConfig bus, Func<BusConfig, IWire> factory, Action<BusConfig, Exception> retryOpen)
+        {
+            bool failed = false;
+            while (true)
+            {
+                try
+                {
+                    IWire wire = factory == null ? new SerialWire(bus, config) : factory(bus);
+                    if (failed) Log.Write("COM port " + bus.Port + " opened successfully");
+                    return wire;
+                }
+                catch (IOException e) { if (retryOpen == null) throw; retryOpen(bus, e); }
+                catch (UnauthorizedAccessException e) { if (retryOpen == null) throw; retryOpen(bus, e); }
+                failed = true;
             }
         }
         byte[] Await(Work w, double budget)

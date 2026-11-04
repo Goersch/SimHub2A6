@@ -57,7 +57,7 @@ namespace SimHub2SimRig.HMI
                 catch (Exception failure) { if (!IsDisposed) status.Text = failure.Message; }
             };
             FormClosing += async (s, e) => {
-                if (force) return; e.Cancel = true; if (closing) return; closing = true;
+                if (force || e.CloseReason == CloseReason.FormOwnerClosing) return; e.Cancel = true; if (closing) return; closing = true;
                 if (await ui.Command(this, new Request { Operation = "analysis.close" })) { force = true; Close(); }
                 closing = false;
             };

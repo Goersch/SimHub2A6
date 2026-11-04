@@ -47,7 +47,7 @@ namespace SimHub2SimRig.HMI
             }
             status.AutoSize = true; status.MaximumSize = new Size(950, 0); status.Margin = new Padding(4, 16, 4, 4); table.Controls.Add(status, 0, 9); table.SetColumnSpan(status, 4);
             FormClosing += async (s, e) => {
-                if (force) return; e.Cancel = true; if (closing) return; closing = true;
+                if (force || e.CloseReason == CloseReason.FormOwnerClosing) return; e.Cancel = true; if (closing) return; closing = true;
                 if (await ui.Command(this, new Request { Operation = "maintenance.close" })) { force = true; Close(); }
                 closing = false;
             };

@@ -1,10 +1,10 @@
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <ProjectGuid>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69803}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <AssemblyName>SimHub2SimRigHMI</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
     <OutputPath>..\bin\</OutputPath>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>5</LangVersion>
@@ -16,7 +16,6 @@
   <ItemGroup>
     <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Web.Extensions" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" /><Reference Include="System.Windows.Forms.DataVisualization" />
     <ProjectReference Include="..\Shared\SimHub2SimRig.Shared.csproj"><Project>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69801}</Project><Name>SimHub2SimRig.Shared</Name></ProjectReference>
-    <Compile Include="Program.cs" /><Compile Include="MaintenanceForm.cs" /><Compile Include="AnalysisForm.cs" /><Compile Include="DriveStateView.cs" /><Compile Include="SenderIntervalChart.cs" />
+    <Compile Include="Program.cs" /><Compile Include="MaintenanceForm.cs" /><Compile Include="AnalysisForm.cs" /><Compile Include="DriveStateView.cs" /><Compile Include="SenderIntervalChart.cs" /><Compile Include="StatusHistoryForm.cs" /><Compile Include="ComStartup.cs" /><Compile Include="LogTable.cs" />
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

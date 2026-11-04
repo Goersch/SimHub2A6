@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -15,11 +17,13 @@ namespace SimHub2SimRig.HMI
         public readonly Configuration Config;
         public readonly Ini Language;
         public readonly ComClient Client;
+        readonly string hmiSession = Guid.NewGuid().ToString("N");
         public Status Status;
         public UiContext(string root, string pipeName = null) { Config = new Configuration(root); Language = new Ini(Config.PathFor("INI/Language.ini")); Client = new ComClient(pipeName); }
         public string T(string section, string key) { return Language.Get(section, key); }
         public async Task<Reply> Call(Request request)
         {
+            request.HmiSession = hmiSession;
             Reply reply = await Task.Run(() => Client.Send(request));
             if (!reply.Ok) throw new InvalidOperationException(reply.Error);
             return reply;
@@ -50,16 +54,19 @@ namespace SimHub2SimRig.HMI
     public sealed class MainForm : Form
     {
         readonly UiContext ui;
-        readonly Label connection = new Label(), activity = new Label();
+        readonly LogTable connection = new LogTable(true);
+        readonly List<string> statusMessages = new List<string>();
+        StatusHistoryForm statusHistoryForm;
+        string lastConnection, lastActivity, lastComMessage;
         readonly DataGridView motors = new DataGridView();
         readonly SenderIntervalChart timings;
         readonly RigView rig;
         readonly Timer refresh = new Timer();
-        readonly Button leveling, levelingStop, loads, maintenance, analysis;
+        readonly Button initialize, startCom, leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff;
         readonly RadioButton[] modes = new RadioButton[3];
         MaintenanceForm maintenanceForm;
         AnalysisForm analysisForm;
-        bool polling, updating, closing, canClose, captureRequested;
+        bool polling, updating, closing, captureRequested, comUnavailable, startingCom;
         int chartTick;
         public MainForm(UiContext context)
         {
@@ -67,21 +74,54 @@ namespace SimHub2SimRig.HMI
             StartPosition = FormStartPosition.Manual; var screen = Screen.AllScreens.Skip(1).FirstOrDefault() ?? Screen.PrimaryScreen; Location = new Point(screen.WorkingArea.Left + 25, screen.WorkingArea.Top + 25);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Padding = new Padding(16) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 160)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 132)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
             Controls.Add(layout);
-            connection.Dock = DockStyle.Fill; connection.Font = new Font(Font, FontStyle.Bold); connection.TextAlign = ContentAlignment.MiddleLeft;
-            connection.Text = "SimHub2SimRigCom …"; layout.Controls.Add(connection, 0, 0); layout.SetColumnSpan(connection, 2);
-            rig = new RigView { Dock = DockStyle.Fill, RawMin = ui.Config.Ini.Int("simhub", "position_min"), RawMax = ui.Config.Ini.Int("simhub", "position_max") }; layout.Controls.Add(rig, 0, 1); layout.SetRowSpan(rig, 3);
+            connection.Name = "statusHistory"; connection.Dock = DockStyle.Fill; connection.Font = Font;
+            var statusPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6), BackColor = Color.WhiteSmoke };
+            statusPanel.Controls.Add(connection); layout.Controls.Add(statusPanel, 0, 3); layout.SetColumnSpan(statusPanel, 2);
+            layout.RowStyles[3].Height = connection.ColumnHeadersHeight + 3 * connection.RowTemplate.Height + statusPanel.Padding.Vertical + statusPanel.Margin.Vertical;
+            connection.DoubleClick += (s, e) => ShowStatusHistory();
+            statusPanel.DoubleClick += (s, e) => ShowStatusHistory();
+            AddStatus("HMI gestartet - warte auf Com", true);
+            rig = new RigView { Dock = DockStyle.Fill, RawMin = ui.Config.Ini.Int("simhub", "position_min"), RawMax = ui.Config.Ini.Int("simhub", "position_max") }; layout.Controls.Add(rig, 0, 0); layout.SetRowSpan(rig, 3);
             motors.Dock = DockStyle.Fill; motors.ReadOnly = true; motors.AllowUserToAddRows = motors.AllowUserToDeleteRows = false; motors.RowHeadersVisible = false; motors.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; motors.BackgroundColor = Color.White; motors.BorderStyle = BorderStyle.None; motors.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             motors.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             motors.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            motors.Font = new Font(Font.FontFamily, Font.Size * 1.2f, Font.Style);
+            motors.ColumnHeadersDefaultCellStyle.Font = motors.Font;
+            motors.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
+            motors.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            motors.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
             foreach (string key in new[] { "table_axis", "table_leveling_offset", "table_load_rate", "table_state", "table_grease" }) motors.Columns.Add(key, ui.T("MainDialog", key));
             for (int a = 1; a <= 7; a++) motors.Rows.Add(ui.T("Analysis", "axis_" + a), "—", "—", "—", "—");
-            layout.Controls.Add(motors, 1, 1);
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke, ColumnCount = 4, RowCount = 4, Padding = new Padding(2) };
+            var motorPanel = new Panel { Dock = DockStyle.Fill };
+            motorPanel.Controls.Add(motors);
+            initialize = UiContext.Button("INIT", async () => {
+                initialize.Enabled = false;
+                await Send("initialize"); await Poll();
+            });
+            initialize.AutoSize = false; initialize.Dock = DockStyle.Fill;
+            initialize.Font = new Font(Font.FontFamily, 32, FontStyle.Bold);
+            initialize.MinimumSize = new Size(200, 96);
+            motorPanel.Controls.Add(initialize); initialize.BringToFront();
+            startCom = UiContext.Button("START", async () => await StartComAndInitialize());
+            startCom.Visible = false; startCom.Enabled = false;
+            startCom.AutoSize = false; startCom.Dock = DockStyle.Fill;
+            startCom.Font = new Font(Font.FontFamily, 32, FontStyle.Bold);
+            startCom.MinimumSize = initialize.MinimumSize;
+            motorPanel.Controls.Add(startCom);
+            layout.Controls.Add(motorPanel, 1, 0);
+            Action fitMotorTable = () => {
+                int height = Math.Max(initialize.MinimumSize.Height, motors.ColumnHeadersHeight + motors.Rows.GetRowsHeight(DataGridViewElementStates.Visible)) + motorPanel.Margin.Vertical;
+                if (layout.RowStyles[0].Height != height) layout.RowStyles[0].Height = height;
+            };
+            motors.RowHeightChanged += (s, e) => fitMotorTable();
+            motors.ColumnHeadersHeightChanged += (s, e) => fitMotorTable();
+            motors.FontChanged += (s, e) => fitMotorTable();
+            fitMotorTable();
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke, ColumnCount = 4, RowCount = 3, Padding = new Padding(2) };
             for (int i = 0; i < 4; i++) actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             for (int i = 0; i < 3; i++) actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-            actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             leveling = UiContext.Button(ui.T("Panels", "leveling_start"), async () => await Send("leveling.start"));
             levelingStop = UiContext.Button(ui.T("Panels", "leveling_stop"), async () => await Send("leveling.stop"));
             loads = UiContext.Button(ui.T("Panels", "save_load_values"), async () => {
@@ -95,8 +135,8 @@ namespace SimHub2SimRig.HMI
                 if (maintenanceForm != null && !maintenanceForm.IsDisposed) { maintenanceForm.Activate(); return; }
                 if (await Send("maintenance.open")) { maintenanceForm = new MaintenanceForm(ui); maintenanceForm.Show(this); }
             });
-            var lightOn = UiContext.Button(ui.T("Panels", "light_on"), async () => await Light(true));
-            var lightOff = UiContext.Button(ui.T("Panels", "light_off"), async () => await Light(false));
+            lightOn = UiContext.Button(ui.T("Panels", "light_on"), async () => await Light(true));
+            lightOff = UiContext.Button(ui.T("Panels", "light_off"), async () => await Light(false));
             foreach (Button button in new[] { leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff }) button.Dock = DockStyle.Fill;
             actions.Controls.Add(leveling, 0, 0);
             actions.Controls.Add(levelingStop, 0, 1);
@@ -115,15 +155,79 @@ namespace SimHub2SimRig.HMI
                 modeFlow.Controls.Add(radio);
             }
             modePanel.Controls.Add(modeFlow); actions.Controls.Add(modePanel, 3, 0); actions.SetRowSpan(modePanel, 3);
-            activity.Dock = DockStyle.Fill; activity.TextAlign = ContentAlignment.MiddleLeft; actions.Controls.Add(activity, 0, 3); actions.SetColumnSpan(activity, 4);
-            layout.Controls.Add(actions, 1, 2);
+            layout.Controls.Add(actions, 1, 1);
             timings = new SenderIntervalChart(ui.Config.Ini.Number("ui", "trigger_chart_window_s"));
-            layout.Controls.Add(timings, 1, 3);
+            layout.Controls.Add(timings, 1, 2);
+            UpdateInitializationControls(false, false);
             refresh.Interval = Math.Max(50, ui.Config.Ini.Int("ui", "refresh_ms")); refresh.Tick += async (s, e) => await Poll(); refresh.Start();
             Shown += async (s, e) => await Poll();
             FormClosing += OnClosing;
         }
         Task<bool> Send(string command) { return ui.Command(this, new Request { Operation = command }); }
+        async Task StartComAndInitialize()
+        {
+            if (startingCom || closing) return;
+            startingCom = true; UpdateInitializationControls(false, false);
+            AddStatus("Com-Verbindung wird hergestellt …", true);
+            try
+            {
+                await ComStartup.Run(async () => (await ui.Call(new Request { Operation = "status" })).Status,
+                    () => {
+                        string executable = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SimHub2SimRigCom.exe");
+                        if (!File.Exists(executable)) throw new FileNotFoundException("Com-Anwendung wurde nicht gefunden.", executable);
+                        // Windows directory names cannot contain quotes. Double
+                        // trailing backslashes so they cannot escape the quote.
+                        string root = ui.Config.Root;
+                        int trailing = root.Length - root.TrimEnd('\\').Length;
+                        string quotedRoot = "\"" + root + new string('\\', trailing) + "\"";
+                        var process = Process.Start(new ProcessStartInfo(executable, "--root " + quotedRoot) { WorkingDirectory = root, UseShellExecute = true, WindowStyle = ProcessWindowStyle.Normal });
+                        if (process == null) throw new InvalidOperationException("Com konnte nicht gestartet werden.");
+                        process.Dispose(); AddStatus("Com gestartet – warte auf Verbindung.", true);
+                    }, async () => {
+                        AddStatus("Verbindung zu Com steht – INIT wird angefordert.", true);
+                        await ui.Call(new Request { Operation = "initialize" });
+                    }, () => closing || IsDisposed);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception e) { if (!IsDisposed && !closing) AddStatus("Com-Start/INIT fehlgeschlagen: " + e.Message, true); }
+            finally { startingCom = false; }
+            if (!IsDisposed && !closing) await Poll();
+        }
+        void ShowStatusHistory()
+        {
+            if (statusHistoryForm == null || statusHistoryForm.IsDisposed)
+            {
+                statusHistoryForm = new StatusHistoryForm(statusMessages);
+                statusHistoryForm.Show(this);
+            }
+            else
+            {
+                if (statusHistoryForm.WindowState == FormWindowState.Minimized) statusHistoryForm.WindowState = FormWindowState.Normal;
+                statusHistoryForm.Activate();
+            }
+        }
+        void AddStatus(string message, bool timestamp)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            string output = timestamp ? "[HMI] " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message : "[COM] " + message;
+            statusMessages.Add(output); connection.AddMessage(output);
+            while (connection.Rows.Count > 3) connection.Rows.RemoveAt(0);
+            if (statusHistoryForm != null && !statusHistoryForm.IsDisposed) statusHistoryForm.AddMessage(output);
+        }
+        void UpdateInitializationControls(bool initialized, bool canInitialize)
+        {
+            bool showStart = comUnavailable && !startingCom;
+            startCom.Visible = showStart; startCom.Enabled = showStart;
+            if (showStart) startCom.BringToFront();
+            initialize.Visible = !initialized && !showStart; initialize.Enabled = canInitialize && !startingCom;
+            motors.Visible = initialized; motors.Enabled = rig.Enabled = timings.Enabled = initialized;
+            foreach (Form dialog in OwnedForms) if (dialog != statusHistoryForm) dialog.Enabled = initialized;
+            if (!initialized)
+            {
+                foreach (Button button in new[] { leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff }) button.Enabled = false;
+                foreach (RadioButton radio in modes) radio.Enabled = false;
+            }
+        }
         async Task Light(bool enabled)
         {
             try
@@ -147,21 +251,34 @@ namespace SimHub2SimRig.HMI
             }
             catch (Exception e)
             {
-                if (IsDisposed) return; connection.Text = "SimHub2SimRigCom ist nicht erreichbar. Com starten.  " + e.Message;
-                leveling.Enabled = levelingStop.Enabled = loads.Enabled = maintenance.Enabled = analysis.Enabled = false;
-                foreach (RadioButton radio in modes) radio.Enabled = false;
+                if (IsDisposed) return;
+                string message = "SimHub2SimRigCom ist nicht erreichbar. Com starten. " + e.Message;
+                if (message != lastConnection) { AddStatus(message, true); lastConnection = message; }
+                connection.ForeColor = Color.Firebrick;
+                comUnavailable = true;
+                UpdateInitializationControls(false, false);
             }
             finally { polling = false; }
         }
         public void UpdateStatus(Status status)
         {
+                comUnavailable = false;
                 ui.Status = status;
-                connection.Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss") + "    SimHub2SimRigCom  |  " + (status.Simulated ? "SIMULATION  |  " : "") + "SimHub: " + (status.Connected ? "Connected" : "Disconnected") + (status.GameRunning ? "  /  Recording" : "");
+                string summary = "SimHub2SimRigCom  |  " + (status.Simulated ? "SIMULATION  |  " : "") + "SimHub: " + (status.Connected ? "Connected" : "Disconnected") + (status.GameRunning ? "  /  Recording" : "");
+                if (summary != lastConnection) { AddStatus(summary, true); lastConnection = summary; }
                 connection.ForeColor = status.Simulated ? Color.DarkOrange : status.Connected ? Color.ForestGreen : Color.SteelBlue;
                 BackColor = ColorTranslator.FromHtml(ui.Config.Ini.Get("ui", status.Connected ? "connected_background" : "disconnected_background"));
-                activity.Text = status.Activity + (string.IsNullOrEmpty(status.LastError) ? "" : "  |  " + status.LastError);
-                activity.ForeColor = string.IsNullOrEmpty(status.LastError) ? Color.SteelBlue : Color.Firebrick;
+                string activity = status.Activity + (string.IsNullOrEmpty(status.LastError) ? "" : "  |  " + status.LastError);
+                if (activity != lastActivity) { AddStatus(activity, true); lastActivity = activity; }
+                if (!string.IsNullOrEmpty(status.LastError)) connection.ForeColor = Color.Firebrick;
+                if (status.Messages != null && status.Messages.Length > 0)
+                {
+                    int start = Array.IndexOf(status.Messages, lastComMessage) + 1;
+                    for (int i = start; i < status.Messages.Length; i++) AddStatus(status.Messages[i], false);
+                    lastComMessage = status.Messages[status.Messages.Length - 1];
+                }
                 bool ready = status.Initialized && !status.Busy && status.Playback == "stopped";
+                lightOn.Enabled = lightOff.Enabled = status.Initialized;
                 leveling.Enabled = ready && !status.Connected && !status.Maintenance && !status.Analysis && status.Mode != "center";
                 levelingStop.Enabled = status.Leveling || status.Activity == "Leveling";
                 loads.Enabled = ready && !status.GameRunning && !status.Maintenance && !status.Analysis;
@@ -173,7 +290,7 @@ namespace SimHub2SimRig.HMI
                 foreach (AxisStatus axis in status.Axes)
                 {
                     var row = motors.Rows[axis.Axis - 1];
-                    row.Cells[1].Value = axis.Offset.ToString("F2") + " mm"; row.Cells[2].Value = axis.Load.ToString("F1") + " %";
+                    row.Cells[1].Value = axis.Offset.ToString("F2") + " mm"; row.Cells[2].Value = status.GameRunning ? "" : axis.Load.ToString("F1") + " %";
                     row.Cells[3].Value = DriveStateView.Text(ui, axis, status);
                     string key = axis.Axis <= 3 ? axis.Axis.ToString() : "4-7";
                     double hours = status.Grease[key].playtimeMinutes / 60;
@@ -187,6 +304,7 @@ namespace SimHub2SimRig.HMI
                 }
                 if (maintenanceForm != null && !maintenanceForm.IsDisposed) maintenanceForm.UpdateStatus(status);
                 if (analysisForm != null && !analysisForm.IsDisposed) analysisForm.UpdateStatus(status);
+                UpdateInitializationControls(status.Initialized, !status.Initialized && !status.Busy);
                 if (captureRequested && !status.Busy)
                 {
                     captureRequested = false;
@@ -199,16 +317,13 @@ namespace SimHub2SimRig.HMI
                 }
         }
         protected override void Dispose(bool disposing) { if (disposing) refresh.Dispose(); base.Dispose(disposing); }
-        async void OnClosing(object sender, FormClosingEventArgs e)
+        void OnClosing(object sender, FormClosingEventArgs e)
         {
-            if (canClose) return;
-            e.Cancel = true; if (closing) return; closing = true; refresh.Stop();
-            try { await ui.Call(new Request { Operation = "hmi.detach" }); }
-            catch (Exception failure) { MessageBox.Show(this, failure.Message + "\nSimHub2SimRigCom läuft unabhängig weiter.", "SimHub2SimRigHMI"); }
-            canClose = true;
+            closing = true; refresh.Stop();
+            // Close local windows without issuing maintenance/analysis stop
+            // commands. Com owns ongoing operations independently of this UI.
             if (maintenanceForm != null) maintenanceForm.ForceClose();
             if (analysisForm != null) analysisForm.ForceClose();
-            Close();
         }
     }
     public sealed class RigView : Control

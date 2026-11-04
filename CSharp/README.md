@@ -16,7 +16,7 @@ im Hauptverzeichnis des Repositorys.
 
 ## Bauen und starten
 
-Voraussetzung: Windows x64 mit **.NET Framework 4.8**. Für den normalen Betrieb werden weder Python noch NuGet-Pakete benötigt. Der mit Windows/.NET Framework vorhandene C#-Compiler reicht für den Skript-Build aus. Die Solution kann auch in Visual Studio mit dem .NET-Framework-4.8-Targeting-Pack geöffnet werden.
+Voraussetzung: Windows x64 mit **.NET Framework 4.8**. Für den normalen Betrieb werden weder Python noch NuGet-Pakete benötigt. Der mit Windows/.NET Framework vorhandene C#-Compiler reicht für den Release-Skript-Build aus. Die Solution verwendet SDK-Projekte mit dem Ziel `net48`; für die Projektunterstützung in VS Code und für `dotnet build` wird zusätzlich ein .NET-SDK benötigt. In einem aktuellen Visual Studio lässt sie sich mit dem .NET-Framework-4.8-Targeting-Pack öffnen.
 
 Aus dem Repository-Verzeichnis:
 
@@ -50,6 +50,14 @@ dessen Roslyn-Compiler für portable PDB-Dateien und kompiliert weiterhin gegen
 die installierten Framework-Assemblies verwendet; ein vorhandenes Targeting-Pack
 hat Vorrang.
 
+Die SDK-Projekte sorgen dafür, dass der C#-Sprachserver das MSBuild des
+.NET-SDKs verwendet. Alte Projekte mit `ToolsVersion="15.0"` konnten stattdessen
+die installierten Visual-Studio-2017-BuildTools auswählen und beim Laden mit
+`GetReferenceNearestTargetFrameworkTask` oder einem nicht erreichbaren
+MSBuild-Kindprozess scheitern. Nach dieser Projektumstellung einmal
+**Developer: Reload Window** ausführen. Die Anwendungen bleiben bei .NET
+Framework 4.8; zusätzliche NuGet-Pakete werden nicht eingebunden.
+
 Die VS-Code-Konfiguration folgt den Hinweisen zur
 [C#-Erweiterung für Framework-Projekte](https://code.visualstudio.com/docs/csharp/cs-dev-kit-faq#project-system)
 und zum [Desktop-CLR-Debugger mit portablen PDBs](https://github.com/dotnet/vscode-csharp/blob/main/docs/debugger/Desktop-.NET-Framework.md).
@@ -64,7 +72,37 @@ Com zuerst starten; in einem zweiten Terminal das HMI starten:
 .\CSharp\bin\SimHub2SimRigHMI.exe
 ```
 
-Com initialisiert beim Start die konfigurierten Antriebe und führt denselben Homing-/Positionierablauf wie die Python-Anwendung aus. Das HMI zeigt währenddessen den Status an. Die INI wird beim Programmstart geladen; Änderungen an Ports, Geometrie oder Bewegungsparametern erfordern einen Neustart.
+Com und HMI können unabhängig gestartet werden. Ist Com beim Start des HMI
+nicht erreichbar, erscheint **START** über dem INIT-Button. Ein Klick startet
+Com und blendet START aus. Sobald eine erfolgreiche IPC-Statusabfrage die
+Verbindung bestätigt, fordert das HMI automatisch einmal **INIT** an; eine
+feste Wartezeit gibt es nicht. Ohne Klick wird Com nicht gestartet. Ist Com
+bereits erreichbar, bleibt der bisherige manuelle INIT-Ablauf verfügbar.
+Com wartet nach dem Start auf einen ausdrücklichen **INIT**-Auftrag aus
+dem HMI. Vorher werden keine seriellen Ports geöffnet und keine Antriebe
+initialisiert. Das HMI zeigt einen großen **INIT**-Button; alle anderen
+Bedienfunktionen einschließlich Licht und Moduswahl sind gesperrt. Ist Com
+nicht erreichbar, ist INIT gesperrt und START verfügbar.
+
+Nach einem Klick auf **INIT** öffnet Com die Ports und führt den bisherigen
+Homing-/Positionierablauf aus. Währenddessen zeigt das HMI den Fortschritt und
+sperrt auch den INIT-Button. Nach erfolgreichem Abschluss erscheint die normale
+Achsentabelle und die Bedienung wird freigegeben. Schlägt die Initialisierung
+fehl, bleiben die übrigen Funktionen gesperrt und INIT kann erneut angefordert
+werden. Die INI wird beim Programmstart geladen; Änderungen an Ports,
+Geometrie oder Bewegungsparametern erfordern einen Neustart.
+
+Bis zum erfolgreichen Abschluss der Initialisierung verwirft Com alle
+SimHub-Telegramme, auch `START`, `POSITIONS`, `END` und `SHUTDOWN`. Sie setzen
+weder Verbindungs- noch Aufzeichnungszustand und werden nicht später
+nachgeholt. Das Beenden von Com über Konsole oder IPC bleibt möglich.
+
+Kann Com einen seriellen Port nicht öffnen (zum Beispiel weil er belegt oder
+nicht verfügbar ist), wird derselbe Port alle **10 Sekunden** erneut geöffnet,
+bis der Zugriff gelingt oder Com beendet wird. Konsole, Log und HMI-Status
+zeigen dabei zum Beispiel `COM Error (COM6) - I try again in 10 seconds` und
+die Fehlerursache. Erst wenn alle Ports geöffnet sind, beginnt die
+Antriebsinitialisierung. Das Beenden von Com unterbricht die Wartezeit sofort.
 
 Beide Programme suchen `INI/SimHub2SimRig.ini` ausgehend vom EXE-Verzeichnis in den übergeordneten Verzeichnissen. Alternativ lässt sich das Datenverzeichnis explizit angeben:
 
@@ -73,7 +111,43 @@ Beide Programme suchen `INI/SimHub2SimRig.ini` ausgehend vom EXE-Verzeichnis in 
 .\CSharp\bin\SimHub2SimRigHMI.exe --root H:\SimHub2SimRig
 ```
 
-Das Schließen des HMI beendet Com **nicht**. Com stoppt auf den Abmeldebefehl laufendes Leveling, Schmierung und Playback, stellt gegebenenfalls den Wartungs-Planner wieder her und sperrt alte SimHub-Ziele bis zum nächsten frischen Positionspaket. Die Wartungs- und Analysefenster lassen sich nach einem HMI-Neustart wieder öffnen. Ein vollständiges Abschalten erfolgt über das Schließen des Com-Fensters, Strg+C im Com-Terminal oder:
+Im aktiven Modus laufen Hub-Statusüberwachung und Sender-Zeitmessung auch ohne
+geöffnetes HMI weiter. Das erneute Öffnen des HMI übernimmt die vorhandene
+Messhistorie und den aktuellen Betriebszustand von Com.
+
+Die Statusausgabe steht am unteren Rand des HMI über die gesamte Fensterbreite
+und zeigt die letzten drei Meldungen als Tabelle mit den Spalten **Datum**,
+**Uhrzeit**, **PROZESS** und **Message**. In der Prozessspalte stehen `COM` oder
+`HMI`; Datum und Uhrzeit werden separat vom Meldungstext dargestellt.
+Unveränderte
+Statusabfragen erzeugen keine doppelten Einträge. Die letzten drei
+Com-Ausgaben werden ebenfalls über IPC übertragen und nach einem HMI-Neustart
+wieder angezeigt.
+
+Ein Doppelklick auf die Statusleiste öffnet die **Meldungen seit HMI-Start**.
+Dieser Dialog zeigt alle während der aktuellen HMI-Sitzung eingegangenen
+Meldungen mit Zeitstempel und Herkunft. Neue Meldungen werden auch im offenen
+Dialog ergänzt; vertikale und horizontale Scrollleisten erlauben das Lesen
+älterer beziehungsweise langer Ausgaben. Beim Zurückscrollen bleibt die
+Leseposition erhalten. Mit einem Neustart des HMI beginnt eine neue Historie.
+
+Com protokolliert `HMI connected`, `HMI disconnected` und bei einer angenommenen
+Initialisierungsanforderung `INIT request received by HMI`. Das HMI kennzeichnet
+seine Statusabfragen mit einer Sitzungs-ID; nach fünf Sekunden ohne Kontakt
+wird die Trennung gemeldet. Diese Erkennung dient der Statusausgabe und
+beeinflusst weder Initialisierung noch laufende Vorgänge.
+
+Nach einmal erfolgreichem INIT ist kein geöffnetes HMI mehr erforderlich.
+Das Schließen oder der Verlust des HMI ändert den Zustand von Com nicht:
+SimHub-Verarbeitung, Bewegung, Aufzeichnung, Statusabfragen sowie laufendes
+Leveling, Schmierung oder Playback laufen unverändert weiter. INIT gilt bis zum
+Beenden des Com-Prozesses. Ein neu gestartetes HMI übernimmt diesen Zustand;
+Wartungs- und Analysefenster können zur Bedienung laufender Vorgänge erneut
+geöffnet werden. Das ausdrückliche Schließen eines einzelnen Wartungs- oder
+Analysefensters behält seinen bisherigen Abschlussablauf.
+
+Ein vollständiges Abschalten erfolgt über das Schließen des Com-Fensters,
+Strg+C im Com-Terminal oder:
 
 ```powershell
 .\CSharp\bin\SimHub2SimRigCom.exe --shutdown
@@ -143,6 +217,13 @@ behält aus Kompatibilitätsgründen seinen bisherigen Namen; sein Wert ist kein
 pauschale Alarmnummer. Der separate ServoStatus aus `U41.0A` wird ebenfalls
 berücksichtigt: ServoStatus `3` bleibt als tatsächlicher Antriebsfehler sichtbar,
 auch wenn `U40.43` gleichzeitig `0` oder `5` enthält.
+
+Während eines laufenden SimHub-Spiels setzt Com die zyklischen Load-Abfragen
+für alle sieben Antriebe aus; das HMI zeigt die Load-Felder dann leer an.
+Antriebsstatus und im Modus `actual_positions` die Istpositionen werden weiter
+abgefragt. Nach `END` oder einem SimHub-Verbindungsabbruch beginnen die
+Load-Abfragen wieder. Wie in Python ist dafür der Spielzustand maßgeblich;
+eine bestehende, aber inaktive SimHub-Verbindung unterdrückt die Abfragen nicht.
 
 Eine reine HMI-Aktualisierung lässt sich bei laufendem Com separat bauen. Das
 HMI vorher schließen:

@@ -52,7 +52,7 @@ namespace SimHub2SimRig.Tests
         }
         static Process WaitForOwnedWorker(Process launcher, string isolated)
         {
-            var client = new ComClient(); int pid = 0;
+            var client = new ComClient(); int pid = 0; bool initRequested = false;
             Until(() => {
                 if (launcher.HasExited) throw new Exception("Com launcher exited: " + ReadWorkerLog(isolated));
                 pid = WorkerPid(isolated); if (pid == 0) return false;
@@ -60,6 +60,12 @@ namespace SimHub2SimRig.Tests
                 {
                     Status status = client.Send(new Request { Operation = "status" }).Status;
                     if (status.ProcessId != pid || !status.Simulated) throw new Exception("Tests refuse to control an unrelated or non-simulated worker");
+                    if (!initRequested)
+                    {
+                        Check(!status.Initialized && !status.Busy, "Worker waits for HMI INIT");
+                        Check(client.Send(new Request { Operation = "initialize" }).Ok, "Test HMI requests worker initialization");
+                        initRequested = true; return false;
+                    }
                     return status.Initialized && !status.Busy;
                 }
                 catch (TimeoutException) { return false; }

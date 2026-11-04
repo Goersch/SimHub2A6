@@ -23,6 +23,7 @@ namespace SimHub2SimRig.Shared
     }
     public sealed class Request
     {
+        public string HmiSession { get; set; }
         public string Operation { get; set; }
         public string FileName { get; set; }
         public string Mode { get; set; }
@@ -71,6 +72,7 @@ namespace SimHub2SimRig.Shared
         public bool Busy { get; set; }
         public string Activity { get; set; }
         public string LastError { get; set; }
+        public string[] Messages { get; set; }
         public string Mode { get; set; }
         public bool Leveling { get; set; }
         public int FixedAxis { get; set; }

@@ -1,7 +1,16 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- SDK-style projects make Roslyn use the installed .NET SDK instead of
+       selecting the legacy Visual Studio 2017 MSBuild host. Keep the explicit
+       source lists and the same runtime layout as build.ps1. -->
+  <PropertyGroup>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
   <!-- Match build.ps1 when Framework 4.8 is installed without its separate
        Targeting Pack. Installed reference assemblies always take precedence. -->
-  <PropertyGroup Condition="'$(TargetFrameworkVersion)' == 'v4.8' and '$(OS)' == 'Windows_NT' and !Exists('$(MSBuildProgramFiles32)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\mscorlib.dll') and Exists('$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319\mscorlib.dll')">
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48' and '$(OS)' == 'Windows_NT' and !Exists('$(MSBuildProgramFiles32)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\mscorlib.dll') and Exists('$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319\mscorlib.dll')">
     <FrameworkPathOverride Condition="'$(FrameworkPathOverride)' == ''">$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319</FrameworkPathOverride>
     <BypassFrameworkInstallChecks>true</BypassFrameworkInstallChecks>
   </PropertyGroup>

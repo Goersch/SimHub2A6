@@ -1,10 +1,10 @@
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <ProjectGuid>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69801}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AssemblyName>SimHub2SimRig.Shared</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFramework>net48</TargetFramework>
     <OutputPath>..\bin\</OutputPath>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>5</LangVersion>
@@ -16,5 +16,4 @@
     <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Web.Extensions" />
     <Compile Include="Contracts.cs" /><Compile Include="Configuration.cs" />
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

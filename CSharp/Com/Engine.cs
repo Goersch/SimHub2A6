@@ -27,6 +27,8 @@ namespace SimHub2SimRig.Com
         readonly Func<BusConfig, IWire> wireFactory;
         readonly HashSet<int> maintenancePlanners = new HashSet<int>(), faultAxes = new HashSet<int>();
         readonly Queue<double> intervals = new Queue<double>();
+        readonly object hmiGate = new object();
+        readonly Dictionary<Guid, double> hmiSessions = new Dictionary<Guid, double>();
         readonly List<Task> loops = new List<Task>();
         readonly AxisStatus[] telemetry = Enumerable.Range(1, 7).Select(a => new AxisStatus { Axis = a }).ToArray();
         readonly int[] latest = Enumerable.Repeat(65535, 7).ToArray();
@@ -35,7 +37,7 @@ namespace SimHub2SimRig.Com
         Task job;
         UdpClient udp;
         volatile bool initialized, initializing, connected, game, maintenance, analysis, shutdown, armed = true, busy;
-        volatile bool leveling, greasing, detaching;
+        volatile bool leveling, greasing;
         volatile string mode = "simhub", activity = "", error = "";
         int greaseFirst, greaseLast, hubIndex;
         double lastHubCheck;
@@ -70,13 +72,13 @@ namespace SimHub2SimRig.Com
             loops.Add(Task.Factory.StartNew(SenderLoop, TaskCreationOptions.LongRunning));
             loops.Add(Task.Factory.StartNew(RecorderLoop, TaskCreationOptions.LongRunning));
             loops.Add(Task.Factory.StartNew(TelemetryLoop, TaskCreationOptions.LongRunning));
-            StartJob("Initialization", Initialize);
+            Log.Write("Com ready - waiting for HMI INIT request");
         }
         void StartJob(string name, Action action)
         {
             lock (jobGate)
             {
-                if (busy || detaching || Playback.State != "stopped") throw new InvalidOperationException("An operation is already running");
+                if (busy || Playback.State != "stopped") throw new InvalidOperationException("An operation is already running");
                 if (shutdown) throw new InvalidOperationException("Shutdown in progress");
                 busy = true; activity = name; error = ""; OperationStop.Reset();
                 job = Task.Factory.StartNew(() => {
@@ -90,17 +92,20 @@ namespace SimHub2SimRig.Com
         void EnsureIdle(bool requireDisconnected = false)
         {
             if (!initialized) throw new InvalidOperationException("A6 initialization not complete");
-            if (busy || detaching || Playback.State != "stopped" || shutdown) throw new InvalidOperationException("An operation is already running");
+            if (busy || Playback.State != "stopped" || shutdown) throw new InvalidOperationException("An operation is already running");
             if (game || (requireDisconnected && connected)) throw new InvalidOperationException("SimHub is active");
         }
         public Reply Handle(Request request)
         {
+            if (request != null && request.Operation != "hmi.detach") TouchHmi(request.HmiSession);
             if (request != null && (request.Operation == "status" || request.Operation == "files" || request.Operation == "preview")) return HandleCore(request);
             lock (commandGate) return HandleCore(request);
         }
         Reply HandleCore(Request request)
         {
             if (request == null || request.Operation == null) throw new ArgumentException("Missing IPC operation");
+            if (!initialized && request.Operation != "status" && request.Operation != "initialize" && request.Operation != "hmi.detach" && request.Operation != "shutdown" && request.Operation != "shutdown.wait")
+                throw new InvalidOperationException("A6 initialization not complete. Request INIT from the HMI first.");
             // All validation is repeated here; disabled HMI buttons are not an
             // authorization or a motion interlock.
             switch (request.Operation)
@@ -108,10 +113,10 @@ namespace SimHub2SimRig.Com
                 case "status": return new Reply { Ok = true, Status = Snapshot() };
                 case "files": return new Reply { Ok = true, Files = Recordings.Files() };
                 case "preview": return new Reply { Ok = true, Samples = Recordings.Preview(request.FileName) };
-                case "initialize": EnsureIdleForInitialization(); StartJob("Initialization", Initialize); break;
+                case "initialize": EnsureIdleForInitialization(); Log.Write("INIT request received by HMI"); StartJob("Initialization", Initialize); break;
                 case "mode":
                     if (request.Mode != "simhub" && request.Mode != "actual_positions" && request.Mode != "center") throw new ArgumentException("Invalid mode");
-                    if (busy || detaching || Playback.State != "stopped" || maintenance || analysis) throw new InvalidOperationException("Motion mode is locked");
+                    if (busy || Playback.State != "stopped" || maintenance || analysis) throw new InvalidOperationException("Motion mode is locked");
                     if (!initialized) throw new InvalidOperationException("A6 initialization not complete");
                     lock (MotionGate) { mode = request.Mode; Recorder.ReadActual(mode == "actual_positions"); }
                     if (mode == "center") StartJob("Center", Center); break;
@@ -153,7 +158,7 @@ namespace SimHub2SimRig.Com
                     Playback.Stop();
                     StartJob("Finish analysis", () => { Center(); analysis = false; armed = false; }); break;
                 case "playback.play":
-                    if (!analysis || maintenance || busy || detaching || !initialized || mode == "center" || shutdown) throw new InvalidOperationException("Playback is locked");
+                    if (!analysis || maintenance || busy || !initialized || mode == "center" || shutdown) throw new InvalidOperationException("Playback is locked");
                     Recordings.Resolve(request.FileName);
                     Playback.Play(request.FileName, request.Axes); break;
                 case "playback.pause": Playback.Pause(); break;
@@ -164,29 +169,9 @@ namespace SimHub2SimRig.Com
                     if (!analysis) throw new InvalidOperationException("Analysis is closed");
                     Playback.Seek(request.Seconds); break;
                 case "hmi.detach":
-                    // Accepted immediately; Com owns the complete cleanup even
-                    // after the UI process has exited.
-                    if (detaching) break;
-                    detaching = true; OperationStop.Set();
-                    lock (jobGate)
-                    {
-                        Task previousJob = job; busy = true; activity = "HMI detach";
-                        job = Task.Factory.StartNew(() => {
-                            try
-                            {
-                                Playback.Stop();
-                                if (previousJob != null) previousJob.Wait();
-                                lock (MotionGate)
-                                {
-                                    if (initialized && maintenance) RestorePlanners();
-                                    if (initialized && analysis) Center();
-                                    maintenance = false; analysis = false; armed = false;
-                                }
-                            }
-                            catch (Exception e) { Report(e); }
-                            finally { activity = ""; busy = false; detaching = false; }
-                        }, TaskCreationOptions.LongRunning);
-                    }
+                    // Compatibility with older HMI clients. HMI presence never
+                    // changes Com's initialization, operations or motion state.
+                    DisconnectHmi(request.HmiSession);
                     break;
                 case "shutdown": RequestShutdown(); break;
                 case "shutdown.wait":
@@ -198,6 +183,26 @@ namespace SimHub2SimRig.Com
             return new Reply { Ok = true };
         }
         void EnsureIdleForInitialization() { if (initialized || busy || maintenance || analysis || game) throw new InvalidOperationException("Initialization unavailable"); }
+        void TouchHmi(string session)
+        {
+            Guid id; if (!Guid.TryParse(session, out id)) return;
+            lock (hmiGate)
+            {
+                if (!hmiSessions.ContainsKey(id)) Log.Write("HMI connected");
+                hmiSessions[id] = Timing.Now;
+            }
+        }
+        void DisconnectHmi(string session)
+        {
+            Guid id; if (!Guid.TryParse(session, out id)) return;
+            lock (hmiGate) if (hmiSessions.Remove(id)) Log.Write("HMI disconnected");
+        }
+        void CheckHmiConnections()
+        {
+            lock (hmiGate)
+                foreach (Guid id in hmiSessions.Where(p => Timing.Now - p.Value >= 5).Select(p => p.Key).ToArray())
+                { hmiSessions.Remove(id); Log.Write("HMI disconnected"); }
+        }
         void RequireMaintenance() { EnsureIdle(true); if (!maintenance) throw new InvalidOperationException("Open maintenance first"); }
         static void ValidateGroup(int first, int last)
         { if (!((first >= 1 && first <= 3 && first == last) || (first == 4 && last == 7))) throw new ArgumentException("Invalid axis group"); }
@@ -218,8 +223,10 @@ namespace SimHub2SimRig.Com
         }
         public bool HandlePosition(int axis, int raw, bool trigger = false, bool playback = false)
         {
-            if (mode == "center" || maintenance || shutdown || !armed || !initialized || initializing || greasing || leveling || !Config.Axes[axis - 1].Enabled) return false;
+            if (mode == "center" || maintenance || shutdown || !initialized || initializing || greasing || leveling || !Config.Axes[axis - 1].Enabled) return false;
             if (axis >= 4 && !HubAccepts()) return false;
+            // Operational motion interlocks do not suspend hub monitoring.
+            if (!armed) return false;
             double mm = TargetMm(axis, raw); if (Math.Abs(Previous[axis - 1] - mm) <= 1) return false;
             AxisConfig a = Config.Axes[axis - 1]; int rpm = Config.SpeedRpm(axis, a.Speed);
             if (!Motion.ParametersMatch(axis, rpm, a.Accel, a.Decel)) Motion.Parameters(axis, rpm, a.Accel, a.Decel, true);
@@ -263,12 +270,25 @@ namespace SimHub2SimRig.Com
             }
             throw new TimeoutException(homing ? "Homing timeout" : "Position timeout");
         }
+        void RetryPortOpen(BusConfig bus, Exception failure)
+        {
+            activity = "COM Error (" + bus.Port + ") - I try again in 10 seconds";
+            error = failure.Message;
+            Log.Write(activity + ": " + failure.Message);
+            // Closing Com must interrupt the delay and release any ports that
+            // were already opened before this port failed.
+            if (Stop.Wait(TimeSpan.FromSeconds(10))) throw new OperationCanceledException();
+            activity = "Initialization"; error = "";
+            Log.Write("Retrying COM port " + bus.Port);
+        }
         public void Initialize()
         {
             initializing = true; initialized = false;
             try
             {
-                Motion.Reset(); if (!Bus.Connected) Bus.Connect(wireFactory);
+                if (Stop.IsSet) throw new OperationCanceledException();
+                Motion.Reset(); if (!Bus.Connected) Bus.Connect(wireFactory, RetryPortOpen);
+                if (Stop.IsSet) throw new OperationCanceledException();
                 // Python's connection diagnostics read these in this order.
                 foreach (int axis in Config.Enabled())
                 {
@@ -341,7 +361,7 @@ namespace SimHub2SimRig.Com
         public void SetGame(bool value) { Recorder.SetRunning(value); game = value; }
         public void Dispatch(string message, IPEndPoint reply = null)
         {
-            if (analysis) return;
+            if (!initialized || initializing || analysis) return;
             foreach (string part in message.Replace("\r", "").Split(';').Select(s => s.Trim()).Where(s => s.Length != 0))
             {
                 string[] tokens = part.Split((char[])null, StringSplitOptions.RemoveEmptyEntries); string cmd = tokens[0].ToUpperInvariant();
@@ -372,6 +392,10 @@ namespace SimHub2SimRig.Com
                 try
                 {
                     IPEndPoint from = new IPEndPoint(IPAddress.Any, 0); byte[] bytes = udp.Receive(ref from);
+                    // Drain and discard pre-INIT datagrams, including START and
+                    // SHUTDOWN. They must not set connection/recording state or
+                    // become stale motion targets once initialization finishes.
+                    if (!initialized || initializing) continue;
                     last = Timing.Now; connected = true; Dispatch(System.Text.Encoding.UTF8.GetString(bytes), from);
                 }
                 catch (SocketException e)
@@ -389,7 +413,7 @@ namespace SimHub2SimRig.Com
             double next = Timing.Now, previous = 0, cycle = Config.Ini.Number("simhub", "sender_cycle_s");
             while (!Stop.IsSet)
             {
-                if (!analysis && !maintenance && !shutdown && initialized && !busy && !detaching)
+                if (!analysis && !maintenance && !shutdown && initialized && !busy)
                 {
                     try
                     {
@@ -419,6 +443,7 @@ namespace SimHub2SimRig.Com
                 double now = Timing.Now;
                 try
                 {
+                    CheckHmiConnections();
                     Recorder.Tick(Math.Min(Math.Max(now - previous, 0), interval * 2));
                     lock (greaseGate)
                     {
@@ -445,8 +470,11 @@ namespace SimHub2SimRig.Com
                         if (mode == "actual_positions") Recorder.SetActual(axis, Motion.PositionMm(axis) - Config.Axes[axis - 1].Zero);
                         if (Timing.Now >= nextStatus)
                         {
-                            int load = Motion.Load(axis), fault = Motion.Error(axis), servo = Motion.ServoStatus(axis); bool homed = Motion.Homed(axis);
-                            lock (stateGate) { var t = telemetry[axis - 1]; t.Load = load / Config.Ini.Number("leveling", "load_rate_units_per_percent"); t.Error = fault; t.Servo = servo; t.Homed = homed; }
+                            // Match Python's motor table: do not spend bus time on
+                            // load measurements while SimHub is running a game.
+                            int? load = game ? (int?)null : Motion.Load(axis);
+                            int fault = Motion.Error(axis), servo = Motion.ServoStatus(axis); bool homed = Motion.Homed(axis);
+                            lock (stateGate) { var t = telemetry[axis - 1]; if (load.HasValue) t.Load = load.Value / Config.Ini.Number("leveling", "load_rate_units_per_percent"); t.Error = fault; t.Servo = servo; t.Homed = homed; }
                             nextStatus = Timing.Now + Config.Ini.Number("ui", "axis_status_refresh_ms") / 1000 / axes.Length;
                         }
                     }
@@ -465,7 +493,8 @@ namespace SimHub2SimRig.Com
             double[] timing; lock (stateGate) timing = intervals.ToArray();
             int[] positions; lock (latestGate) positions = (int[])latest.Clone();
             double[] center, loads; lock (Recorder.Gate) { center = (double[])Recorder.Center.Clone(); loads = Recorder.CalibrationLoads == null ? null : (double[])Recorder.CalibrationLoads.Clone(); }
-            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || detaching || shutdown, Activity = activity, LastError = error, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
+            string[] messages = Log.Recent();
+            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
         }
         public void ArmPlayback() { armed = true; SetGame(false); }
         static readonly int[][] Groups = { new[] { 1, 1 }, new[] { 2, 2 }, new[] { 3, 3 }, new[] { 4, 7 } };

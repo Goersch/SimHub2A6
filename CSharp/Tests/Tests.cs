@@ -103,6 +103,101 @@ namespace SimHub2SimRig.Tests
                 bus.F32(1, 0x2002, -123.25f); Equal(-123.25f, bus.ReadF32(1, 0x2002), "Float32");
             }
         }
+        sealed class TrackedWire : IWire
+        {
+            public readonly VirtualWire Inner;
+            public volatile bool Closed;
+            public TrackedWire(int[] axes) { Inner = new VirtualWire(axes); }
+            public byte[] Exchange(byte[] frame, int expected, double timeout, bool wait) { return Inner.Exchange(frame, expected, timeout, wait); }
+            public void Dispose() { Closed = true; Inner.Dispose(); }
+        }
+        static void HmiStatusEvents()
+        {
+            var c = new Configuration(Prepare(root)); int opened = 0;
+            using (var engine = new Engine(c, true, bus => { Interlocked.Increment(ref opened); return new VirtualWire(bus.Axes); }))
+            {
+                engine.Start(); string session = Guid.NewGuid().ToString("N");
+                Status first = engine.Handle(new Request { Operation = "status", HmiSession = session }).Status;
+                string connected = first.Messages.Last();
+                Check(connected.EndsWith("HMI connected"), "Com reports first HMI connection");
+                Status repeated = engine.Handle(new Request { Operation = "status", HmiSession = session }).Status;
+                Check(first.Messages.SequenceEqual(repeated.Messages), "Repeated heartbeat does not duplicate connection output");
+                Until(() => engine.Snapshot().Messages.Last().EndsWith("HMI disconnected"), "Missing heartbeat reports HMI disconnection", 8);
+                Check(!engine.Snapshot().Initialized && !engine.Snapshot().Busy && !engine.OperationStop.IsSet, "HMI tracking does not change Com operation state");
+                Equal(0, Volatile.Read(ref opened), "HMI heartbeat never initializes drives");
+                Check(engine.Handle(new Request { Operation = "status", HmiSession = session }).Status.Messages.Last().EndsWith("HMI connected"), "Returning HMI reports connection again");
+                engine.Handle(new Request { Operation = "hmi.detach", HmiSession = session });
+                Check(engine.Snapshot().Messages.Last().EndsWith("HMI disconnected"), "Explicit old-client detach only reports disconnection");
+                Equal(3, engine.Snapshot().Messages.Length, "Com exposes only its latest three outputs");
+            }
+        }
+        static void PortOpenRecovery()
+        {
+            var c = new Configuration(Prepare(root)); string blockedPort = c.Buses[1].Port;
+            int attempts = 0; var attemptTimes = new List<double>();
+            using (var engine = new Engine(c, true, bus => {
+                if (bus.Port == blockedPort)
+                {
+                    lock (attemptTimes) attemptTimes.Add(Timing.Now);
+                    int attempt = Interlocked.Increment(ref attempts);
+                    if (attempt == 1) throw new IOException("Test port unavailable");
+                    if (attempt == 2) throw new UnauthorizedAccessException("Test port in use");
+                }
+                return new VirtualWire(bus.Axes);
+            }))
+            {
+                string pipeName = "SimHub2SimRig.PortRetry." + Guid.NewGuid().ToString("N");
+                using (var server = new PipeServer(engine, pipeName))
+                {
+                    engine.Start(); server.Start(); var client = new ComClient(pipeName);
+                    Check(client.Send(new Request { Operation = "initialize" }).Ok, "HMI explicitly requests initialization before port recovery");
+                    Until(() => engine.Snapshot().Activity.Contains("I try again in 10 seconds"), "Port error is visible while waiting");
+                    Check(engine.Snapshot().Messages.Any(m => m.EndsWith("INIT request received by HMI")), "Com reports accepted HMI INIT request");
+                    var watch = Stopwatch.StartNew(); Status status = client.Send(new Request { Operation = "status" }).Status;
+                    Check(watch.Elapsed.TotalSeconds < 2, "IPC remains responsive during port retry delay");
+                    Check(status.Busy && !status.Initialized, "Initialization stays pending during port failure");
+                    Check(status.Activity.Contains(blockedPort) && status.Activity.Contains("COM Error"), "HMI status identifies failed port and retry");
+                    Equal("Test port unavailable", status.LastError, "HMI status includes port error details");
+                    Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can leave after requesting INIT");
+                    Equal(status.Activity, engine.Snapshot().Activity, "Closing HMI does not change pending initialization");
+                    Check(!engine.OperationStop.IsSet, "Closing HMI does not cancel initialization");
+                    Thread.Sleep(200); Equal(1, Volatile.Read(ref attempts), "Port retry does not spin immediately");
+                    Until(() => engine.Snapshot().LastError == "Test port in use", "Access-denied errors are retried too", 13);
+                    Until(() => engine.Snapshot().Initialized && !engine.Snapshot().Busy, "Initialization resumes after the port becomes available", 30);
+                    Equal(3, Volatile.Read(ref attempts), "Failed port is retried until it opens");
+                    lock (attemptTimes)
+                        for (int i = 1; i < attemptTimes.Count; i++) Check(attemptTimes[i] - attemptTimes[i - 1] >= 10, "Each failed port open waits a full ten seconds");
+                    Equal("", engine.Snapshot().LastError, "Port error clears after recovery");
+                }
+            }
+        }
+        static void PortOpenCancellation()
+        {
+            var c = new Configuration(Prepare(root)); TrackedWire opened = null; int attempts = 0;
+            Stopwatch shutdownWatch = null;
+            using (var engine = new Engine(c, true, bus => {
+                if (bus.Port == c.Buses[1].Port) { Interlocked.Increment(ref attempts); throw new UnauthorizedAccessException("Test permanently blocked port"); }
+                opened = new TrackedWire(bus.Axes); return opened;
+            }))
+            {
+                engine.Start();
+                Check(engine.Handle(new Request { Operation = "initialize" }).Ok, "Explicit INIT before cancellation test");
+                Until(() => engine.Snapshot().Activity.Contains("I try again in 10 seconds"), "Blocked port enters retry delay");
+                Check(opened != null && !opened.Closed, "Previously opened port is owned during connection setup");
+                Equal(0, opened.Inner.Frames.Count, "No drive commands before every port is accessible");
+                shutdownWatch = Stopwatch.StartNew(); engine.RequestShutdown();
+            }
+            Check(shutdownWatch.Elapsed.TotalSeconds < 3, "Shutdown interrupts ten-second retry delay promptly");
+            Equal(1, Volatile.Read(ref attempts), "No further port retries after shutdown");
+            Check(opened.Closed, "Shutdown releases ports opened before the failure");
+            using (var bus = new Modbus(c))
+            {
+                int retries = 0;
+                Throws<ArgumentException>(() => bus.Connect(_ => { throw new ArgumentException("Invalid port configuration"); }, (port, failure) => retries++), "Configuration errors are not retried");
+                Equal(0, retries, "Only port access failures trigger retry");
+                Check(!bus.Connected, "Failed connection leaves no open routes");
+            }
+        }
         static void Compare(Scenario scenario, Dictionary<string, VirtualWire> wires)
         {
             foreach (var pair in scenario.Frames)
@@ -207,15 +302,58 @@ namespace SimHub2SimRig.Tests
             text = text.Replace("load_rate_samples = 11", "load_rate_samples = 1").Replace("verify_batches = 5", "verify_batches = 1").Replace("settle_time_s = 2.0", "settle_time_s = 0.01").Replace("settle_check_delay_s = 0.4", "settle_check_delay_s = 0.01");
             File.WriteAllText(iniPath, text); var c = new Configuration(testRoot);
             var wires = new Dictionary<string, VirtualWire>();
-            using (var engine = new Engine(c, true, b => { var w = new VirtualWire(b.Axes); lock (wires) wires[b.Port] = w; return w; }))
+            int[] loadReads = new int[7], stateReads = new int[7], actualReads = new int[7], servoReads = new int[7];
+            int targetWrites = 0, triggerWrites = 0;
+            Func<int[], int[]> counts = values => Enumerable.Range(0, 7).Select(i => Volatile.Read(ref values[i])).ToArray();
+            using (var engine = new Engine(c, true, b => {
+                var w = new VirtualWire(b.Axes);
+                w.Override = frame => {
+                    if (frame[1] == 3)
+                    {
+                        int axis = frame[0] - 1, address = frame[2] << 8 | frame[3];
+                        if (address == 0x4007) Interlocked.Increment(ref loadReads[axis]);
+                        if (address == 0x4043) Interlocked.Increment(ref stateReads[axis]);
+                        if (address == 0x4016) Interlocked.Increment(ref actualReads[axis]);
+                        if (address == 0x410a) Interlocked.Increment(ref servoReads[axis]);
+                    }
+                    if (frame[1] == 16 && frame[2] == 0x11 && frame[3] == 6) Interlocked.Increment(ref targetWrites);
+                    if (frame[1] == 6 && frame[2] == 4 && frame[3] == 0x15) Interlocked.Increment(ref triggerWrites);
+                    return null;
+                };
+                lock (wires) wires[b.Port] = w; return w;
+            }))
             using (var server = new PipeServer(engine, "SimHub2SimRig.Tests." + Guid.NewGuid().ToString("N")))
             {
                 // Get the test pipe name via an independent known server below.
-                engine.Start(); Until(() => engine.Snapshot().Initialized && !engine.Snapshot().Busy, "Engine startup", 35);
+                engine.Start();
                 string pipeName = "SimHub2SimRig.Tests." + Guid.NewGuid().ToString("N");
                 using (var actualServer = new PipeServer(engine, pipeName))
                 {
                     actualServer.Start(); var client = new ComClient(pipeName);
+                    Status waiting = client.Send(new Request { Operation = "status" }).Status;
+                    int recordingsBeforeInit = Directory.GetFiles(c.PathFor("SimHubData"), "*.csv").Length;
+                    Check(!waiting.Initialized && !waiting.Busy, "Com starts idle and awaits HMI INIT");
+                    Thread.Sleep(150); lock (wires) Equal(0, wires.Count, "Starting Com does not open serial ports automatically");
+                    foreach (string command in new[] { "mode", "leveling.start", "loads.save", "maintenance.open", "analysis.open", "grease.reset", "playback.play" })
+                        Check(!client.Send(new Request { Operation = command }).Ok, "Com rejects pre-INIT function " + command);
+                    using (var earlyUdp = new UdpClient())
+                    {
+                        var endpoint = new IPEndPoint(IPAddress.Loopback, c.Ini.Int("simhub", "udp_port"));
+                        byte[] early = System.Text.Encoding.ASCII.GetBytes("START;POSITIONS 1 1 1 1 1 1 1;END;SHUTDOWN");
+                        earlyUdp.Send(early, early.Length, endpoint); engine.Dispatch("START;POSITIONS 1 1 1 1 1 1 1;SHUTDOWN");
+                        Thread.Sleep(200); Status ignored = engine.Snapshot();
+                        Check(!ignored.Connected && !ignored.GameRunning && !engine.Stop.IsSet, "All SimHub telegrams are ignored before INIT");
+                        Check(ignored.LatestPositions.SequenceEqual(waiting.LatestPositions), "Pre-INIT targets are not cached");
+                        Check(client.Send(new Request { Operation = "initialize" }).Ok, "HMI requests INIT through IPC");
+                        Check(!client.Send(new Request { Operation = "initialize" }).Ok, "Repeated INIT rejected while initialization runs");
+                        earlyUdp.Send(early, early.Length, endpoint); Thread.Sleep(200);
+                        ignored = engine.Snapshot();
+                        Check(!ignored.Connected && !ignored.GameRunning && !engine.Stop.IsSet, "SimHub remains ignored throughout initialization");
+                        Check(ignored.LatestPositions.SequenceEqual(waiting.LatestPositions), "Targets arriving during INIT are not cached");
+                    }
+                    Until(() => engine.Snapshot().Initialized && !engine.Snapshot().Busy, "HMI-requested initialization finishes", 35);
+                    Check(!engine.Snapshot().GameRunning && !engine.Snapshot().Connected, "Finishing INIT does not replay discarded SimHub telegrams");
+                    Equal(recordingsBeforeInit, Directory.GetFiles(c.PathFor("SimHubData"), "*.csv").Length, "Pre-INIT telegrams do not start recordings");
                     Check(client.Send(new Request { Operation = "status" }).Status.Initialized, "IPC status");
                     Check(!client.Send(new Request { Operation = "raw.write" }).Ok, "No raw register commands in HMI protocol");
                     Check(!client.Send(new Request { Operation = "move", FirstAxis = 1, LastAxis = 1, Position = 0 }).Ok, "Com enforces maintenance ownership");
@@ -224,14 +362,38 @@ namespace SimHub2SimRig.Tests
                     using (var udp = new UdpClient())
                     {
                         var endpoint = new IPEndPoint(IPAddress.Loopback, c.Ini.Int("simhub", "udp_port"));
+                        int[] idleLoads = counts(loadReads);
+                        Until(() => counts(loadReads).Zip(idleLoads, (now, baseline) => now > baseline).All(v => v), "Idle telemetry polls loads on every drive");
+                        Check(client.Send(new Request { Operation = "mode", Mode = "actual_positions" }).Ok, "Actual feedback enabled for polling regression");
                         byte[] packet = System.Text.Encoding.ASCII.GetBytes("POSITIONS 65535 65535 65535 65535 65535 65535 65535"); udp.Send(packet, packet.Length, endpoint);
                         Until(() => engine.Snapshot().GameRunning, "UDP starts recording");
                         Check(!client.Send(new Request { Operation = "maintenance.open" }).Ok, "Maintenance blocked by active UDP");
+                        // Let any read issued before START finish before checking
+                        // the wire traffic across multiple complete status cycles.
+                        Thread.Sleep(100);
+                        int[] activeLoads = counts(loadReads), activeStates = counts(stateReads), activeActuals = counts(actualReads);
+                        double activeUntil = Timing.Now + 2 * c.Ini.Number("ui", "axis_status_refresh_ms") / 1000 + .5;
+                        while (Timing.Now < activeUntil) { udp.Send(packet, packet.Length, endpoint); Thread.Sleep(50); }
+                        Check(engine.Snapshot().GameRunning, "SimHub stays active throughout polling check");
+                        for (int i = 0; i < 7; i++)
+                        {
+                            Equal(activeLoads[i], Volatile.Read(ref loadReads[i]), "No load register reads while SimHub plays, axis " + (i + 1));
+                            Check(Volatile.Read(ref stateReads[i]) > activeStates[i], "Drive status still polled while SimHub plays, axis " + (i + 1));
+                            Check(Volatile.Read(ref actualReads[i]) > activeActuals[i], "Actual feedback still polled while SimHub plays, axis " + (i + 1));
+                        }
                         engine.Dispatch("POSITIONS -1 1 2 3 4 5 6;POSITIONS 1 2");
                         byte[] end = System.Text.Encoding.ASCII.GetBytes("END"); udp.Send(end, end.Length, endpoint); Until(() => !engine.Snapshot().GameRunning, "END stops recording");
-                        Until(() => !engine.Snapshot().Connected, "UDP disconnect timeout", 6);
+                        Until(() => counts(loadReads).Zip(activeLoads, (now, baseline) => now > baseline).All(v => v), "Load polling resumes on every drive after END");
+                        Check(engine.Snapshot().Connected, "Load polling resumes while SimHub is still connected but idle");
+                        Check(client.Send(new Request { Operation = "mode", Mode = "simhub" }).Ok, "Restore SimHub mode after polling regression");
+                        udp.Send(packet, packet.Length, endpoint); Until(() => engine.Snapshot().GameRunning, "SimHub restarts before disconnect test");
+                        Until(() => !engine.Snapshot().Connected && !engine.Snapshot().GameRunning, "UDP disconnect ends connection and game state", 6);
+                        int[] disconnectedLoads = counts(loadReads);
+                        Until(() => counts(loadReads).Zip(disconnectedLoads, (now, baseline) => now > baseline).All(v => v), "Load polling resumes on every drive after disconnect");
                     }
                     Check(client.Send(new Request { Operation = "leveling.start" }).Ok, "Leveling request");
+                    Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can leave during leveling");
+                    Check(!engine.OperationStop.IsSet, "HMI detach does not stop leveling");
                     Until(() => !engine.Snapshot().Busy, "Leveling completes", 10); Check(string.IsNullOrEmpty(engine.Snapshot().LastError), "Leveling successful");
                     Check(File.Exists(c.PathFor("INI/leveling_offsets.json")), "Leveling persistence");
                     Check(client.Send(new Request { Operation = "loads.save" }).Ok, "Load capture request"); Until(() => !engine.Snapshot().Busy, "Load capture finishes");
@@ -245,6 +407,9 @@ namespace SimHub2SimRig.Tests
                     Check(string.IsNullOrEmpty(engine.Snapshot().LastError), "Maintenance movement successful");
                     foreach (int axis in c.Enabled(4, 7)) Equal(0, engine.Motion.ServoStatus(axis), "Hub brakes after movement");
                     Check(client.Send(new Request { Operation = "grease.start", FirstAxis = 1, LastAxis = 1 }).Ok, "Grease starts"); Until(() => engine.Snapshot().Greasing, "Greasing active");
+                    Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can leave during greasing");
+                    Thread.Sleep(100);
+                    Check(engine.Snapshot().Greasing && engine.Snapshot().Maintenance && engine.Snapshot().Busy && !engine.OperationStop.IsSet, "Greasing and maintenance remain active without HMI");
                     Check(client.Send(new Request { Operation = "grease.stop" }).Ok, "Grease stop"); Until(() => !engine.Snapshot().Busy, "Grease centered and stopped");
                     Check(client.Send(new Request { Operation = "grease.reset", FirstAxis = 1, LastAxis = 1 }).Ok, "Grease reset"); Near(0, engine.Snapshot().Grease["1"].playtimeMinutes, "Reset counter");
                     Check(client.Send(new Request { Operation = "maintenance.close" }).Ok, "Close maintenance"); Until(() => !engine.Snapshot().Maintenance && !engine.Snapshot().Busy, "Planners restored");
@@ -256,6 +421,8 @@ namespace SimHub2SimRig.Tests
                     Check(!client.Send(new Request { Operation = "playback.play", FileName = "playback.csv", Axes = new[] { 4 } }).Ok, "Partial lift playback rejected");
                     Check(client.Send(new Request { Operation = "playback.play", FileName = "playback.csv", Axes = new[] { 3 } }).Ok, "Playback selected axis 3");
                     Until(() => Math.Abs(engine.Previous[2] - 30) < .01, "Playback maps selected axis correctly");
+                    Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can leave during playback");
+                    Check(engine.Snapshot().Analysis && engine.Snapshot().Playback == "playing", "Playback continues without HMI");
                     Check(client.Send(new Request { Operation = "playback.pause" }).Ok, "Pause"); Thread.Sleep(2200);
                     Check(client.Send(new Request { Operation = "analysis.open" }).Ok, "Reattach to paused analysis");
                     double firstTarget = engine.TargetMm(3, Playback.RawFromTarget(c, 3, 30, engine.Offsets[2]));
@@ -278,8 +445,33 @@ namespace SimHub2SimRig.Tests
                     Check(client.Send(new Request { Operation = "mode", Mode = "actual_positions" }).Ok, "Actual read mode");
                     Thread.Sleep(500); Check(engine.Snapshot().Axes.Any(a => a.Actual != 0), "Actual readings in Com");
                     Check(client.Send(new Request { Operation = "mode", Mode = "center" }).Ok, "Inactive mode centers"); Until(() => !engine.Snapshot().Busy, "Center mode complete");
-                    Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can detach"); Until(() => !engine.Snapshot().Busy, "Detached without terminating Com");
+                    Check(client.Send(new Request { Operation = "mode", Mode = "simhub" }).Ok, "Restore active mode for HMI restart regression");
+                    int pendingTargets = Volatile.Read(ref targetWrites), pendingTriggers = Volatile.Read(ref triggerWrites);
+                    lock (engine.MotionGate)
+                    {
+                        // HMI departure must not discard already accepted targets.
+                        engine.Dispatch("POSITIONS 10000 10000 10000 10000 10000 10000 10000;END");
+                        Check(client.Send(new Request { Operation = "hmi.detach" }).Ok, "HMI can detach");
+                    }
+                    Until(() => !engine.Snapshot().Busy, "Detached without terminating Com");
                     Check(engine.Snapshot().Initialized, "Com runs without HMI");
+                    Until(() => Volatile.Read(ref targetWrites) > pendingTargets && Volatile.Read(ref triggerWrites) > pendingTriggers, "Accepted SimHub targets execute without HMI or another packet");
+                    Check(!engine.OperationStop.IsSet && engine.Snapshot().Mode == "simhub", "HMI departure preserves operation and mode state");
+                    Thread.Sleep(100);
+                    int detachedTargets = Volatile.Read(ref targetWrites), detachedTriggers = Volatile.Read(ref triggerWrites);
+                    int[] detachedServos = counts(servoReads); int detachedSamples = engine.Snapshot().TriggerIntervals.Length;
+                    Thread.Sleep(1800);
+                    for (int axis = 4; axis <= 7; axis++) Check(Volatile.Read(ref servoReads[axis - 1]) - detachedServos[axis - 1] >= 3, "Hub monitoring continues at sender rate without HMI, axis " + axis);
+                    Check(engine.Snapshot().TriggerIntervals.Length > detachedSamples, "Com continues collecting sender timings without HMI");
+                    Equal(detachedTargets, Volatile.Read(ref targetWrites), "Stationary targets are not repeatedly rewritten without HMI");
+                    Equal(detachedTriggers, Volatile.Read(ref triggerWrites), "Idle sender does not emit movement triggers after detach");
+                    Status reattached = new ComClient(pipeName).Send(new Request { Operation = "status" }).Status;
+                    Check(reattached.Initialized && reattached.TriggerIntervals.Length > 0, "Restarted HMI receives existing initialization and timing history");
+                    int[] reattachedServos = counts(servoReads); Thread.Sleep(1800);
+                    for (int axis = 4; axis <= 7; axis++) Check(Volatile.Read(ref servoReads[axis - 1]) - reattachedServos[axis - 1] >= 3, "Hub monitoring remains active after HMI reconnect, axis " + axis);
+                    Equal(detachedTargets, Volatile.Read(ref targetWrites), "Reconnecting HMI does not change movement targets");
+                    engine.Dispatch("POSITIONS 20000 20000 20000 20000 20000 20000 20000;END");
+                    Until(() => Volatile.Read(ref targetWrites) > detachedTargets && Volatile.Read(ref triggerWrites) > detachedTriggers, "SimHub motion continues after HMI restart");
                 }
             }
         }
@@ -308,10 +500,39 @@ namespace SimHub2SimRig.Tests
             status.Leveling = false; status.Greasing = true; status.GreaseFirst = 4; status.GreaseLast = 7; hub.Error = 0;
             Equal(context.T("MainDialog", "state_greasing"), SimHub2SimRig.HMI.DriveStateView.Text(context, hub, status), "Greasing matches Python state precedence");
         }
+        static void ComStartWorkflow()
+        {
+            int queries = 0, launched = 0, initialized = 0;
+            var watch = Stopwatch.StartNew();
+            SimHub2SimRig.HMI.ComStartup.Run(() => {
+                int attempt = ++queries;
+                if (attempt < 4) { var failed = new TaskCompletionSource<Status>(); failed.SetException(new TimeoutException("Not connected yet")); return failed.Task; }
+                return Task.FromResult(new Status());
+            }, () => launched++, () => { Check(queries >= 4, "INIT waits for confirmed IPC connection"); initialized++; return Task.FromResult(0); }, () => false).GetAwaiter().GetResult();
+            Equal(1, launched, "START launches Com once"); Equal(1, initialized, "START requests INIT once");
+            Check(watch.Elapsed.TotalSeconds < 5, "Connected Com initializes without a fixed five-second delay");
+            SimHub2SimRig.HMI.ComStartup.Run(() => Task.FromResult(new Status { Initialized = true }), () => launched++, () => { initialized++; return Task.FromResult(0); }, () => false).GetAwaiter().GetResult();
+            Equal(1, launched, "Existing connection does not launch another Com"); Equal(1, initialized, "Initialized Com is not initialized again");
+            bool canceled = false;
+            Throws<OperationCanceledException>(() => SimHub2SimRig.HMI.ComStartup.Run(() => { var failed = new TaskCompletionSource<Status>(); failed.SetException(new IOException("Offline")); return failed.Task; }, () => canceled = true, () => { initialized++; return Task.FromResult(0); }, () => canceled).GetAwaiter().GetResult(), "Closing HMI cancels pending startup wait");
+            Equal(1, initialized, "No INIT after HMI closes before connection");
+            Throws<FileNotFoundException>(() => SimHub2SimRig.HMI.ComStartup.Run(() => { var failed = new TaskCompletionSource<Status>(); failed.SetException(new IOException("Offline")); return failed.Task; }, () => { throw new FileNotFoundException("Com executable missing"); }, () => { initialized++; return Task.FromResult(0); }, () => false).GetAwaiter().GetResult(), "Launch errors are reported without initializing");
+            Equal(1, initialized, "Failed process launch never sends INIT");
+            SimHub2SimRig.HMI.ComStartup.Run(() => Task.FromResult(new Status { Busy = true }), () => launched++, () => { initialized++; return Task.FromResult(0); }, () => false).GetAwaiter().GetResult();
+            Equal(1, initialized, "Already busy Com does not receive a duplicate INIT");
+        }
         static void RenderUi()
         {
             System.Windows.Forms.Application.EnableVisualStyles();
             System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+            var offlineContext = new SimHub2SimRig.HMI.UiContext(testRoot, "SimHub2SimRig.OfflineClose." + Guid.NewGuid().ToString("N"));
+            foreach (System.Windows.Forms.Form form in new System.Windows.Forms.Form[] { new SimHub2SimRig.HMI.MainForm(offlineContext), new SimHub2SimRig.HMI.MaintenanceForm(offlineContext), new SimHub2SimRig.HMI.AnalysisForm(offlineContext) })
+                using (form)
+                {
+                    var closing = new System.Windows.Forms.FormClosingEventArgs(System.Windows.Forms.CloseReason.FormOwnerClosing, false);
+                    typeof(System.Windows.Forms.Form).GetMethod("OnFormClosing", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, new object[] { closing });
+                    Check(!closing.Cancel, "HMI exit closes local windows without waiting for Com: " + form.GetType().Name);
+                }
             using (var chart = new SimHub2SimRig.HMI.SenderIntervalChart(60))
             {
                 foreach (double[] history in new[] { new double[0], Enumerable.Repeat(10.0, 25).ToArray(), Enumerable.Repeat(25.0, 6000).ToArray(), new[] { 10.0, 200.0, 10.0 } })
@@ -349,10 +570,21 @@ namespace SimHub2SimRig.Tests
                     Check(form.Controls.Cast<System.Windows.Forms.Control>().All(c => c.IsHandleCreated), "Child control handles: " + name);
                     if (form is SimHub2SimRig.HMI.MainForm)
                     {
-                        var mainGrid = Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single();
+                        var mainGrid = Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single(g => !(g is SimHub2SimRig.HMI.LogTable));
                         Equal(System.Windows.Forms.DataGridViewContentAlignment.MiddleCenter, mainGrid.DefaultCellStyle.Alignment, "Motor values are centered");
                         Equal(System.Windows.Forms.DataGridViewContentAlignment.MiddleCenter, mainGrid.ColumnHeadersDefaultCellStyle.Alignment, "Motor headers are centered");
                         var mainButtons = Descendants(form).OfType<System.Windows.Forms.Button>().ToArray();
+                        var init = mainButtons.Single(b => b.Text == "INIT");
+                        var start = mainButtons.Single(b => b.Text == "START");
+                        Equal(!context.Status.Initialized && !start.Visible, init.Visible, "INIT shown unless START overlays it or initialization is complete");
+                        if (!context.Status.Initialized)
+                        {
+                            var active = start.Visible ? start : init;
+                            Check(active.Font.Size >= 24 && active.Width >= 200 && active.Height >= 96, "INIT/START is a large prominent button");
+                            Equal(!context.Status.Busy, active.Enabled, "INIT/START enabled only while waiting for a request");
+                            Check(mainButtons.Where(b => b != active).All(b => !b.Enabled), "Every other button disabled before INIT completes");
+                            Check(Descendants(form).OfType<System.Windows.Forms.RadioButton>().All(r => !r.Enabled), "Motion modes disabled before INIT completes");
+                        }
                         Action<string, string> below = (upperKey, lowerKey) => {
                             var upper = mainButtons.Single(b => b.Text == context.T("Panels", upperKey));
                             var lower = mainButtons.Single(b => b.Text == context.T("Panels", lowerKey));
@@ -380,17 +612,68 @@ namespace SimHub2SimRig.Tests
                     Check(form.Controls.Count > 0, "Rendered " + name);
                 }
             };
-            var main = new SimHub2SimRig.HMI.MainForm(context); for (int i = 0; i < 10; i++) main.UpdateStatus(status);
-            var grid = Descendants(main).OfType<System.Windows.Forms.DataGridView>().Single();
+            status.Initialized = false;
+            var offline = new SimHub2SimRig.HMI.MainForm(context); offline.UpdateStatus(status);
+            typeof(SimHub2SimRig.HMI.MainForm).GetField("comUnavailable", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(offline, true);
+            typeof(SimHub2SimRig.HMI.MainForm).GetMethod("UpdateInitializationControls", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(offline, new object[] { false, false });
+            capture(offline, "main-start");
+            var main = new SimHub2SimRig.HMI.MainForm(context);
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().All(b => !b.Enabled), "HMI opens with controls disabled until Com status is known");
+            main.UpdateStatus(status); capture(main, "main-init");
+            main = new SimHub2SimRig.HMI.MainForm(context); main.Size = main.MinimumSize; main.UpdateStatus(status); capture(main, "main-init-minimum");
+            status.Busy = true; status.Activity = "Initialization";
+            main = new SimHub2SimRig.HMI.MainForm(context); main.UpdateStatus(status);
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().All(b => !b.Enabled), "INIT and every action disabled during initialization");
+            status.Busy = false; status.Activity = ""; status.LastError = "Test initialization failure"; main.UpdateStatus(status);
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Single(b => b.Text == "INIT").Enabled, "Failed initialization can be retried with INIT");
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Where(b => b.Text != "INIT").All(b => !b.Enabled), "Failure keeps other actions disabled");
+            using (var child = new System.Windows.Forms.Form())
+            {
+                child.Owner = main; main.UpdateStatus(status);
+                Check(!child.Enabled, "Open child dialogs also disabled when initialization is missing");
+                status.Initialized = true; main.UpdateStatus(status);
+                Check(child.Enabled, "Child dialogs enabled again after successful initialization");
+            }
+            main.Dispose(); status.LastError = ""; status.Initialized = true;
+            main = new SimHub2SimRig.HMI.MainForm(context); for (int i = 0; i < 10; i++) main.UpdateStatus(status);
+            var grid = Descendants(main).OfType<System.Windows.Forms.DataGridView>().Single(g => !(g is SimHub2SimRig.HMI.LogTable));
             for (int i = 0; i < 7; i++)
             {
                 Equal(context.T("Common", "status_ok"), Convert.ToString(grid.Rows[i].Cells[3].Value), "Reason 5 displays OK on axis " + (i + 1));
                 Check(grid.Rows[i].DefaultCellStyle.BackColor != System.Drawing.Color.MistyRose, "Reason 5 does not color axis red");
             }
+            status.Connected = true; status.GameRunning = true; main.UpdateStatus(status);
+            for (int i = 0; i < 7; i++) Equal("", Convert.ToString(grid.Rows[i].Cells[2].Value), "Load display is blank during SimHub play, axis " + (i + 1));
+            status.GameRunning = false; main.UpdateStatus(status);
+            for (int i = 0; i < 7; i++) Equal(status.Axes[i].Load.ToString("F1") + " %", Convert.ToString(grid.Rows[i].Cells[2].Value), "Load display returns when SimHub is idle, axis " + (i + 1));
+            status.Connected = false; main.UpdateStatus(status);
             status.Axes[0].Servo = 3; main.UpdateStatus(status);
             Check(Convert.ToString(grid.Rows[0].Cells[3].Value).Contains("Drive fault"), "Grid displays true servo fault even for reason 5");
             Equal(System.Drawing.Color.MistyRose, grid.Rows[0].DefaultCellStyle.BackColor, "True servo fault is red");
-            status.Axes[0].Servo = 1; main.UpdateStatus(status); capture(main, "main");
+            status.Axes[0].Servo = 1;
+            status.Messages = new[] { "2026-11-04 12:00:00.000 HMI connected", "2026-11-04 12:00:01.000 INIT request received by HMI", "2026-11-04 12:00:12.000 Initialization complete" };
+            main.UpdateStatus(status);
+            var statusHistory = Descendants(main).OfType<SimHub2SimRig.HMI.LogTable>().Single(l => l.Name == "statusHistory");
+            Check(statusHistory.Rows.Cast<System.Windows.Forms.DataGridViewRow>().Select(r => (string)r.Tag).SequenceEqual(status.Messages.Select(m => "[COM] " + m)), "Footer shows the latest three Com outputs with their source in order");
+            Equal("04.11.2026", Convert.ToString(statusHistory.Rows[0].Cells[0].Value), "Log date has its own column");
+            Equal("12:00:00.000", Convert.ToString(statusHistory.Rows[0].Cells[1].Value), "Log time has its own column");
+            Equal("COM", Convert.ToString(statusHistory.Rows[0].Cells[2].Value), "Process has its own column");
+            Equal("HMI connected", Convert.ToString(statusHistory.Rows[0].Cells[3].Value), "Message excludes process and timestamp");
+            for (int i = 0; i < 10; i++) main.UpdateStatus(status);
+            Check(statusHistory.Rows.Cast<System.Windows.Forms.DataGridViewRow>().Select(r => (string)r.Tag).SequenceEqual(status.Messages.Select(m => "[COM] " + m)), "Status polling does not duplicate footer history");
+            var retainedMessages = (List<string>)typeof(SimHub2SimRig.HMI.MainForm).GetField("statusMessages", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(main);
+            Check(retainedMessages.Count > 3, "Full session history retains outputs removed from the three-line footer");
+            var historyDialog = new SimHub2SimRig.HMI.StatusHistoryForm(retainedMessages);
+            var historyList = Descendants(historyDialog).OfType<SimHub2SimRig.HMI.LogTable>().Single();
+            Check(historyList.Rows.Cast<System.Windows.Forms.DataGridViewRow>().Select(r => (string)r.Tag).SequenceEqual(retainedMessages.SelectMany(m => m.Replace("\r", "").Split('\n'))), "History dialog contains all retained messages in order");
+            int historyLines = historyList.Rows.Count;
+            historyDialog.AddMessage("[COM] Live-Meldung\nWeitere Fehlerdetails");
+            Equal(historyLines + 2, historyList.Rows.Count, "Live updates include multiline COM output");
+            Check(historyList.ScrollBars == System.Windows.Forms.ScrollBars.Both, "History supports scrolling for long outputs");
+            for (int i = 0; i < 150; i++) historyDialog.AddMessage("[COM] Testmeldung " + i.ToString("D3") + " - Statusausgabe seit HMI-Start");
+            historyDialog.AddMessage("[COM] " + string.Concat(Enumerable.Repeat("Lange Meldung mit zusätzlichen Details. ", 8)));
+            capture(historyDialog, "status-history");
+            capture(main, "main");
             main = new SimHub2SimRig.HMI.MainForm(context); main.Size = main.MinimumSize; for (int i = 0; i < 10; i++) main.UpdateStatus(status); capture(main, "main-minimum");
             status.Maintenance = true; var maintenance = new SimHub2SimRig.HMI.MaintenanceForm(context); maintenance.UpdateStatus(status); capture(maintenance, "maintenance");
             maintenance = new SimHub2SimRig.HMI.MaintenanceForm(context); maintenance.Size = maintenance.MinimumSize; maintenance.UpdateStatus(status); capture(maintenance, "maintenance-minimum");
@@ -414,7 +697,7 @@ namespace SimHub2SimRig.Tests
                 process.BeginOutputReadLine(); process.BeginErrorReadLine();
                 try
                 {
-                    var client = new ComClient();
+                    var client = new ComClient(); bool initRequested = false;
                     Until(() => {
                         if (process.HasExited) throw new Exception("Com EXE failed: " + output);
                         try
@@ -423,6 +706,12 @@ namespace SimHub2SimRig.Tests
                             int ownedWorker = WorkerPid(isolated);
                             if (ownedWorker == 0) return false;
                             if (s.ProcessId != ownedWorker || !s.Simulated) throw new InvalidOperationException("Another Com session is already running; test will not control it");
+                            if (!initRequested)
+                            {
+                                Check(!s.Initialized && !s.Busy, "External Com awaits explicit INIT");
+                                Check(client.Send(new Request { Operation = "initialize" }).Ok, "External HMI client requests INIT");
+                                initRequested = true; return false;
+                            }
                             return s.Initialized && !s.Busy;
                         }
                         catch (TimeoutException) { return false; }
@@ -451,7 +740,7 @@ namespace SimHub2SimRig.Tests
             root = args[0]; testRoot = Prepare(root); config = new Configuration(testRoot);
             int binAt = Array.IndexOf(args, "--bin");
             binaryDirectory = binAt >= 0 ? args[binAt + 1] : Path.Combine(root, "CSharp", "bin");
-            if (args.Contains("--ui-only")) { Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
+            if (args.Contains("--ui-only")) { Run("START waits for IPC connection before INIT", ComStartWorkflow); Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
             if (args.Contains("--console-only"))
             {
                 Run("Actual Com launcher and awaited shutdown", ExecutableLifecycle);
@@ -485,6 +774,9 @@ namespace SimHub2SimRig.Tests
                 }
             });
             Run("CRC retries, exception responses, signed and float reads", TransportErrors);
+            Run("HMI connection events, timeout and three-output history", HmiStatusEvents);
+            Run("COM access errors retry every ten seconds and recover", PortOpenRecovery);
+            Run("COM retry cancellation and partial-port cleanup", PortOpenCancellation);
             Run("Three-bus queue barrier and failed-write trigger suppression", Barrier);
             Run("CSV compatibility, calibration, preview and playback conversion", CsvAndPersistence);
             Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
