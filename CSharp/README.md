@@ -235,6 +235,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\CSharp\build.ps1 -HmiOnly
 Damit werden weder Com noch dessen gemeinsame DLL ersetzt. Ein abweichendes
 Buildverzeichnis ist über `-OutputDirectory <Verzeichnis>` möglich.
 
+Der Sender und die Aufzeichnung verwenden wiederverwendbare, hochauflösende
+Windows-Timer mit sofortiger Shutdown-Unterbrechung. Auch die seriellen
+Zwischenpausen und Antwortabfragen warten über einen Timer mit einer höchstens
+0,5 ms langen Feinwartephase. Die konfigurierten RTU-Pausen bleiben erhalten.
+Während eines Spiels
+entfallen zusätzlich die drei Homing-Abfragen je Statusprüfung; Fehlerstatus,
+ServoStatus, Hub-Interlock und angeforderte Istpositionen werden weiter geprüft.
+Außerhalb des Spiels werden Homing und Lastwerte wieder aktualisiert.
+
+Die CSV-Aufzeichnung kopiert den Bewegungszustand kurz unter einer Sperre und
+führt Berechnung, Formatierung und Dateizugriffe anschließend außerhalb dieser
+Sperre aus. Gepufferte Zeilen werden spätestens beim nächsten Aufzeichnungstakt
+nach einer Sekunde sowie bei END und geordnetem Shutdown ausgeschrieben. Bei
+einem Prozessabbruch können noch gepufferte Daten fehlen. Messverfahren und
+reproduzierbare Performance-Prüfungen stehen in [PERFORMANCE.md](PERFORMANCE.md).
+
 Die Tabellenköpfe und Werte im Hauptfenster sind zentriert. Die Bedienknöpfe
 stehen in festen Spalten: Leveling Start/Stop/Lastwerte speichern, Licht
 Ein/Aus sowie Maintenance/Analysis. Das Senderdiagramm zeigt 0–100 ms. Sein

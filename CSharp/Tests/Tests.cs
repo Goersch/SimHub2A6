@@ -740,6 +740,20 @@ namespace SimHub2SimRig.Tests
             root = args[0]; testRoot = Prepare(root); config = new Configuration(testRoot);
             int binAt = Array.IndexOf(args, "--bin");
             binaryDirectory = binAt >= 0 ? args[binAt + 1] : Path.Combine(root, "CSharp", "bin");
+            if (args.Contains("--performance-checks"))
+            {
+                Run("High-resolution deadlines and shutdown cancellation", PrecisionTiming);
+                Run("Blocked CSV writes do not block motion or telemetry", RecordingDoesNotBlockMotion);
+                Run("Game telemetry budget and maintenance refresh", GameTelemetryBudget);
+                return failures == 0 ? 0 : 1;
+            }
+            if (args.Contains("--performance-only"))
+            {
+                int reportAt = Array.IndexOf(args, "--performance-report");
+                string report = reportAt >= 0 ? args[reportAt + 1] : Path.Combine(root, "CSharp", "Tests", "work", "performance.json");
+                Run("Sender scheduling and simulated bus contention", () => PerformanceBenchmarks(report));
+                return failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--ui-only")) { Run("START waits for IPC connection before INIT", ComStartWorkflow); Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
             if (args.Contains("--console-only"))
             {
@@ -774,6 +788,9 @@ namespace SimHub2SimRig.Tests
                 }
             });
             Run("CRC retries, exception responses, signed and float reads", TransportErrors);
+            Run("High-resolution deadlines and shutdown cancellation", PrecisionTiming);
+            Run("Blocked CSV writes do not block motion or telemetry", RecordingDoesNotBlockMotion);
+            Run("Game telemetry budget and maintenance refresh", GameTelemetryBudget);
             Run("HMI connection events, timeout and three-output history", HmiStatusEvents);
             Run("COM access errors retry every ten seconds and recover", PortOpenRecovery);
             Run("COM retry cancellation and partial-port cleanup", PortOpenCancellation);

@@ -80,6 +80,7 @@ namespace SimHub2SimRig.Com
     {
         readonly Configuration config;
         public readonly object Gate = new object();
+        readonly object writerGate = new object();
         public readonly SimAxis[] Axes;
         readonly Dictionary<int, SimAxis> pending = new Dictionary<int, SimAxis>();
         readonly double[] actual = new double[7], actualAt = new double[7];
@@ -87,6 +88,7 @@ namespace SimHub2SimRig.Com
         public double[] Center;
         public double[] CalibrationLoads;
         StreamWriter writer;
+        double lastFlush;
         bool running, readActual;
         public string CurrentFile { get; private set; }
         public Recorder(Configuration config)
@@ -121,11 +123,11 @@ namespace SimHub2SimRig.Com
         public double[] ActualSnapshot() { lock (Gate) return (double[])actual.Clone(); }
         public void SetRunning(bool value)
         {
-            lock (Gate)
+            lock (writerGate)
             {
                 if (value && !running)
                 {
-                    foreach (SimAxis a in Axes) { a.Position = a.Target; a.Velocity = 0; }
+                    lock (Gate) foreach (SimAxis a in Axes) { a.Position = a.Target; a.Velocity = 0; }
                     Start();
                 }
                 else if (!value && running) Close();
@@ -143,32 +145,43 @@ namespace SimHub2SimRig.Com
         {
             DeleteExpired(); string name = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"), path = config.PathFor("SimHubData/" + name + ".csv"); int suffix = 1;
             while (File.Exists(path)) path = config.PathFor("SimHubData/" + name + "_" + (suffix++).ToString("00") + ".csv");
-            writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(true)) { AutoFlush = true, NewLine = "\n" };
+            writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(true)) { NewLine = "\n" };
             CurrentFile = Path.GetFileName(path);
             var header = new List<string> { "Timestamp" };
             foreach (string prefix in new[] { "Value", "TargetPosition", "CalculatedActualPosition", "ActualPosition", "ActualPositionTimestamp", "ActualPositionAgeMs", "ActualVelocity" })
                 header.AddRange(Enumerable.Range(1, 7).Select(a => prefix + a));
             foreach (string prefix in new[] { "GroundDeviation", "GroundLoad" }) header.AddRange(Enumerable.Range(4, 4).Select(a => prefix + a));
-            writer.WriteLine(string.Join(";", header)); Log.Write("Recording " + CurrentFile);
+            writer.WriteLine(string.Join(";", header)); writer.Flush(); lastFlush = Timing.Now; Log.Write("Recording " + CurrentFile);
         }
         static string F(double v, string format = "F6") { return v.ToString(format, CultureInfo.InvariantCulture); }
         public void Tick(double dt)
         {
-            lock (Gate)
+            lock (writerGate)
             {
                 if (!running) return;
-                foreach (SimAxis axis in Axes) SimAxis.Advance(axis, dt);
-                double[][] ground = Geometry.State(config, Enumerable.Range(3, 4).Select(i => Axes[i].Position - config.Axes[i].Zero).ToArray(), Center);
-                var row = new List<string> { DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) };
-                row.AddRange(Axes.Select(a => a.Raw.ToString(CultureInfo.InvariantCulture)));
-                row.AddRange(Axes.Select((a, i) => F(a.Target - config.Axes[i].Zero)));
-                row.AddRange(Axes.Select((a, i) => F(a.Position - config.Axes[i].Zero)));
-                row.AddRange(actual.Select(v => F(v)));
-                row.AddRange(actualDates.Select(v => v.HasValue ? v.Value.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) : ""));
-                double now = Timing.Now;
-                row.AddRange(actualDates.Select((v, i) => v.HasValue ? F(Math.Max(0, (now - actualAt[i]) * 1000), "F3") : ""));
-                row.AddRange(Axes.Select(a => F(a.Velocity))); row.AddRange(ground[0].Select(v => F(v))); row.AddRange(ground[1].Select(v => F(v, "F9")));
+                SimAxis[] snapshot; double[] positions, sampledAt, center; DateTime?[] dates;
+                DateTime recordedAt; double now;
+                // The motion lock protects only a coherent state snapshot.
+                // Geometry, formatting, flushing and disk I/O must never hold
+                // up Stage/Trigger, actual-position updates or HMI snapshots.
+                lock (Gate)
+                {
+                    foreach (SimAxis axis in Axes) SimAxis.Advance(axis, dt);
+                    snapshot = Axes.Select(a => new SimAxis { Raw = a.Raw, Target = a.Target, Position = a.Position, Velocity = a.Velocity }).ToArray();
+                    positions = (double[])actual.Clone(); sampledAt = (double[])actualAt.Clone(); dates = (DateTime?[])actualDates.Clone(); center = (double[])Center.Clone();
+                    recordedAt = DateTime.Now; now = Timing.Now;
+                }
+                double[][] ground = Geometry.State(config, Enumerable.Range(3, 4).Select(i => snapshot[i].Position - config.Axes[i].Zero).ToArray(), center);
+                var row = new List<string> { recordedAt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) };
+                row.AddRange(snapshot.Select(a => a.Raw.ToString(CultureInfo.InvariantCulture)));
+                row.AddRange(snapshot.Select((a, i) => F(a.Target - config.Axes[i].Zero)));
+                row.AddRange(snapshot.Select((a, i) => F(a.Position - config.Axes[i].Zero)));
+                row.AddRange(positions.Select(v => F(v)));
+                row.AddRange(dates.Select(v => v.HasValue ? v.Value.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) : ""));
+                row.AddRange(dates.Select((v, i) => v.HasValue ? F(Math.Max(0, (now - sampledAt[i]) * 1000), "F3") : ""));
+                row.AddRange(snapshot.Select(a => F(a.Velocity))); row.AddRange(ground[0].Select(v => F(v))); row.AddRange(ground[1].Select(v => F(v, "F9")));
                 writer.WriteLine(string.Join(";", row));
+                if (now - lastFlush >= 1) { writer.Flush(); lastFlush = now; }
             }
         }
         public static double[] LoadCenter(Configuration config, double[] loads)
@@ -193,7 +206,7 @@ namespace SimHub2SimRig.Com
             public double centerOfGravityLeft2Right { get; set; }
         }
         void Close() { if (writer != null) { writer.Dispose(); writer = null; Log.Write("Recording stopped"); } }
-        public void Dispose() { lock (Gate) { Close(); running = false; } }
+        public void Dispose() { lock (writerGate) { Close(); running = false; } }
     }
     // Simulated drive replies travel through the same RTU encoder and workers.
     // No SerialPort is constructed in --simulate mode.

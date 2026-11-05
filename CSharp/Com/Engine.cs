@@ -411,6 +411,7 @@ namespace SimHub2SimRig.Com
         void SenderLoop()
         {
             double next = Timing.Now, previous = 0, cycle = Config.Ini.Number("simhub", "sender_cycle_s");
+            using (var wait = new PrecisionWait(Stop))
             while (!Stop.IsSet)
             {
                 if (!analysis && !maintenance && !shutdown && initialized && !busy)
@@ -431,13 +432,14 @@ namespace SimHub2SimRig.Com
                 }
                 else previous = 0;
                 next += cycle; double rest = next - Timing.Now;
-                if (rest > 0) Stop.Wait(TimeSpan.FromSeconds(rest)); else next = Timing.Now;
+                if (rest > 0) wait.Wait(rest); else next = Timing.Now;
             }
         }
         void RecorderLoop()
         {
             double interval = Config.Ini.Number("simulation", "simulation_interval_s"), previous = Timing.Now, next = previous, lastSave = previous, playtimeAt = previous;
             bool was = false;
+            using (var wait = new PrecisionWait(Stop))
             while (!Stop.IsSet)
             {
                 double now = Timing.Now;
@@ -454,7 +456,7 @@ namespace SimHub2SimRig.Com
                 }
                 catch (Exception e) { Report(e); }
                 previous = now; next += interval; double rest = next - Timing.Now;
-                if (rest > 0) Stop.Wait(TimeSpan.FromSeconds(rest)); else next = Timing.Now;
+                if (rest > 0) wait.Wait(rest); else next = Timing.Now;
             }
         }
         void TelemetryLoop()
@@ -462,7 +464,7 @@ namespace SimHub2SimRig.Com
             int[] axes = Config.Enabled(); int index = 0; double nextStatus = 0;
             while (!Stop.IsSet)
             {
-                if (Bus.Connected && !initializing)
+                if (axes.Length > 0 && Bus.Connected && !initializing)
                 {
                     int axis = axes[index++ % axes.Length];
                     try
@@ -473,8 +475,13 @@ namespace SimHub2SimRig.Com
                             // Match Python's motor table: do not spend bus time on
                             // load measurements while SimHub is running a game.
                             int? load = game ? (int?)null : Motion.Load(axis);
-                            int fault = Motion.Error(axis), servo = Motion.ServoStatus(axis); bool homed = Motion.Homed(axis);
-                            lock (stateGate) { var t = telemetry[axis - 1]; if (load.HasValue) t.Load = load.Value / Config.Ini.Number("leveling", "load_rate_units_per_percent"); t.Error = fault; t.Servo = servo; t.Homed = homed; }
+                            int fault = Motion.Error(axis), servo = Motion.ServoStatus(axis);
+                            // Homing configuration/status costs three extra
+                            // transactions and is only used by maintenance UI.
+                            // Keep live fault polling and the sender's separate
+                            // hub interlock; refresh homing again outside games.
+                            bool? homed = game ? (bool?)null : Motion.Homed(axis);
+                            lock (stateGate) { var t = telemetry[axis - 1]; if (load.HasValue) t.Load = load.Value / Config.Ini.Number("leveling", "load_rate_units_per_percent"); t.Error = fault; t.Servo = servo; if (homed.HasValue) t.Homed = homed.Value; }
                             nextStatus = Timing.Now + Config.Ini.Number("ui", "axis_status_refresh_ms") / 1000 / axes.Length;
                         }
                     }

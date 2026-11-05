@@ -5,12 +5,58 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
 using SimHub2SimRig.Shared;
 
 namespace SimHub2SimRig.Com
 {
+    // Each timing-sensitive worker owns one reusable, interruptible timer.
+    // Unlike millisecond event timeouts, this does not round the 10-ms sender
+    // deadline to the Windows clock tick or busy-spin while waiting.
+    public sealed class PrecisionWait : IDisposable
+    {
+        sealed class TimerHandle : WaitHandle
+        {
+            public TimerHandle()
+            {
+                SafeWaitHandle handle = CreateWaitableTimerExW(IntPtr.Zero, null, 2, 0x00100002);
+                if (handle.IsInvalid) { handle.Dispose(); handle = CreateWaitableTimerExW(IntPtr.Zero, null, 0, 0x00100002); }
+                if (handle.IsInvalid) { int error = Marshal.GetLastWin32Error(); handle.Dispose(); throw new System.ComponentModel.Win32Exception(error); }
+                SafeWaitHandle = handle;
+            }
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        static extern SafeWaitHandle CreateWaitableTimerExW(IntPtr attributes, string name, uint flags, uint access);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool SetWaitableTimer(SafeWaitHandle timer, ref long due, int period, IntPtr callback, IntPtr argument, [MarshalAs(UnmanagedType.Bool)] bool resume);
+        readonly TimerHandle timer = new TimerHandle();
+        readonly ManualResetEventSlim stop;
+        readonly WaitHandle[] handles;
+        public PrecisionWait(ManualResetEventSlim stop = null)
+        { this.stop = stop; handles = stop == null ? null : new[] { stop.WaitHandle, timer }; }
+        public void Wait(double seconds)
+        { if (seconds > 0) WaitUntil(Timing.Now + seconds); }
+        public void WaitUntil(double deadline, double spinTail = 0)
+        {
+            if (stop != null && stop.IsSet) return;
+            double rest = deadline - Timing.Now;
+            if (rest <= 0) return;
+            if (rest > spinTail)
+            {
+                long due = -Math.Max(1L, (long)Math.Ceiling((rest - spinTail) * 10000000));
+                if (!SetWaitableTimer(timer.SafeWaitHandle, ref due, 0, IntPtr.Zero, IntPtr.Zero, false)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                if (handles == null) timer.WaitOne(); else WaitHandle.WaitAny(handles);
+            }
+            // A bounded final phase preserves sub-millisecond RTU deadlines
+            // without spinning through every full inter-frame/poll interval.
+            if (spinTail > 0) while (Timing.Now < deadline && (stop == null || !stop.IsSet)) Thread.SpinWait(30);
+        }
+        public void Dispose() { timer.Dispose(); }
+    }
     public static class Timing
     {
         public static double Now { get { return Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency; } }
@@ -87,6 +133,7 @@ namespace SimHub2SimRig.Com
     {
         readonly SerialPort port;
         readonly double gap, poll;
+        readonly PrecisionWait delay;
         double next;
         public SerialWire(BusConfig bus, Configuration config)
         {
@@ -98,11 +145,11 @@ namespace SimHub2SimRig.Com
             port.DtrEnable = true; port.RtsEnable = true;
             port.ReadTimeout = port.WriteTimeout = Math.Max(1, (int)(ini.Number("modbus", "serial_timeout_s") * 1000));
             gap = ini.Number("modbus", "inter_frame_delay_s"); poll = ini.Number("modbus", "response_poll_delay_s");
-            try { port.Open(); } catch { port.Dispose(); throw; }
+            try { port.Open(); delay = new PrecisionWait(); } catch { port.Dispose(); throw; }
         }
         public byte[] Exchange(byte[] frame, int expected, double timeout, bool wait)
         {
-            Timing.Sleep(next - Timing.Now);
+            delay.WaitUntil(next, .0005);
             port.DiscardInBuffer();
             port.Write(frame, 0, frame.Length);
             port.BaseStream.Flush();
@@ -115,11 +162,11 @@ namespace SimHub2SimRig.Com
                     byte[] part = new byte[available]; int read = port.Read(part, 0, available); bytes.AddRange(part.Take(read));
                     if (expected > 0 && bytes.Count >= expected) break;
                 }
-                else Timing.Sleep(poll);
+                else delay.WaitUntil(Timing.Now + poll, .0005);
             }
             next = Timing.Now + gap; return bytes.ToArray();
         }
-        public void Dispose() { port.Dispose(); }
+        public void Dispose() { try { port.Dispose(); } finally { delay.Dispose(); } }
     }
     // A bus worker owns its serial port. Broadcasts drain every worker first.
     public sealed class Modbus : IDisposable

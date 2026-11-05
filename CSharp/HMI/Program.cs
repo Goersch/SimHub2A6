@@ -62,6 +62,8 @@ namespace SimHub2SimRig.HMI
         readonly SenderIntervalChart timings;
         readonly RigView rig;
         readonly Timer refresh = new Timer();
+        readonly Timer clockRefresh = new Timer();
+        readonly Label clock = new Label();
         readonly Button initialize, startCom, leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff;
         readonly RadioButton[] modes = new RadioButton[3];
         MaintenanceForm maintenanceForm;
@@ -83,7 +85,19 @@ namespace SimHub2SimRig.HMI
             connection.DoubleClick += (s, e) => ShowStatusHistory();
             statusPanel.DoubleClick += (s, e) => ShowStatusHistory();
             AddStatus("HMI gestartet - warte auf Com", true);
-            rig = new RigView { Dock = DockStyle.Fill, RawMin = ui.Config.Ini.Int("simhub", "position_min"), RawMax = ui.Config.Ini.Int("simhub", "position_max") }; layout.Controls.Add(rig, 0, 0); layout.SetRowSpan(rig, 3);
+            var leftPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+            leftPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            clock.Name = "clock"; clock.Dock = DockStyle.Fill; clock.TextAlign = ContentAlignment.MiddleCenter;
+            clock.Font = new Font(Font.FontFamily, 14, FontStyle.Bold); clock.ForeColor = Color.Gray;
+            clock.Text = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            leftPanel.Controls.Add(clock, 0, 0);
+            rig = new RigView(ui) { Dock = DockStyle.Fill, RawMin = ui.Config.Ini.Int("simhub", "position_min"), RawMax = ui.Config.Ini.Int("simhub", "position_max") };
+            leftPanel.Controls.Add(rig, 0, 1); layout.Controls.Add(leftPanel, 0, 0); layout.SetRowSpan(leftPanel, 3);
+            clockRefresh.Interval = 1000;
+            clockRefresh.Tick += (s, e) => clock.Text = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            clockRefresh.Start();
             motors.Dock = DockStyle.Fill; motors.ReadOnly = true; motors.AllowUserToAddRows = motors.AllowUserToDeleteRows = false; motors.RowHeadersVisible = false; motors.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; motors.BackgroundColor = Color.White; motors.BorderStyle = BorderStyle.None; motors.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             motors.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             motors.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
@@ -316,10 +330,10 @@ namespace SimHub2SimRig.HMI
                     }
                 }
         }
-        protected override void Dispose(bool disposing) { if (disposing) refresh.Dispose(); base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) { refresh.Dispose(); clockRefresh.Dispose(); } base.Dispose(disposing); }
         void OnClosing(object sender, FormClosingEventArgs e)
         {
-            closing = true; refresh.Stop();
+            closing = true; refresh.Stop(); clockRefresh.Stop();
             // Close local windows without issuing maintenance/analysis stop
             // commands. Com owns ongoing operations independently of this UI.
             if (maintenanceForm != null) maintenanceForm.ForceClose();
@@ -328,9 +342,10 @@ namespace SimHub2SimRig.HMI
     }
     public sealed class RigView : Control
     {
+        readonly string[] axisLabels;
         public Status Status;
         public int RawMin, RawMax = 131071;
-        public RigView() { DoubleBuffered = true; BackColor = Color.White; }
+        public RigView(UiContext ui) { axisLabels = Enumerable.Range(1, 7).Select(a => ui.T("Analysis", "axis_" + a)).ToArray(); DoubleBuffered = true; BackColor = Color.White; }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e); if (Status == null) return;
@@ -340,7 +355,7 @@ namespace SimHub2SimRig.HMI
             foreach (AxisStatus axis in Status.Axes)
             {
                 int width = Math.Max(40, Width - 48);
-                e.Graphics.DrawString(axis.Axis + "     " + axis.Target.ToString("F1") + " mm", Font, Brushes.DimGray, 20, y);
+                e.Graphics.DrawString(axisLabels[axis.Axis - 1] + "     " + axis.Target.ToString("F1") + " mm", Font, Brushes.DimGray, 20, y);
                 e.Graphics.FillRectangle(Brushes.AliceBlue, 20, y + 23, width, 12);
                 e.Graphics.DrawLine(Pens.SlateGray, 20 + width / 2, y + 20, 20 + width / 2, y + 38);
                 double fraction = Status.LatestPositions == null ? (axis.Target + 100) / 200 : (Status.LatestPositions[axis.Axis - 1] - RawMin) / (double)(RawMax - RawMin);
