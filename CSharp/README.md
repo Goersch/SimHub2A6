@@ -112,6 +112,11 @@ Com sucht `INI/SimHub2SimRigCom.ini`, HMI sucht `INI/SimHub2SimRigHMI.ini`, jewe
 .\CSharp\bin\SimHub2SimRigHMI.exe --root H:\SimHub2SimRig
 ```
 
+In der HMI-INI legt `[ui] monitor = 2` den Startmonitor fest. `1` entspricht dem
+Windows-Anzeigegerät `DISPLAY1`, `2` dem Gerät `DISPLAY2` usw. Fehlt der gewählte
+Monitor, startet HMI auf dem primären Monitor. Ohne den Eintrag gilt `2`.
+Eine Änderung wird beim nächsten HMI-Start übernommen.
+
 Im aktiven Modus laufen Hub-Statusüberwachung und Sender-Zeitmessung auch ohne
 geöffnetes HMI weiter. Zusätzlich misst Com direkt nach jedem UDP-Empfang den
 Abstand zum vorherigen SimHub-Telegramm in Millisekunden, vor Verarbeitung und

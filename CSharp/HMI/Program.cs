@@ -74,7 +74,10 @@ namespace SimHub2SimRig.HMI
         public MainForm(UiContext context)
         {
             ui = context; Text = "SimHub2SimRigHMI"; Font = new Font("Segoe UI", 9); Size = new Size(1320, 820); MinimumSize = new Size(1000, 650);
-            StartPosition = FormStartPosition.Manual; var screen = Screen.AllScreens.Skip(1).FirstOrDefault() ?? Screen.PrimaryScreen; Location = new Point(screen.WorkingArea.Left + 25, screen.WorkingArea.Top + 25);
+            StartPosition = FormStartPosition.Manual;
+            string monitorName = @"\\.\DISPLAY" + ui.Config.Monitor.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(s.DeviceName, monitorName, StringComparison.OrdinalIgnoreCase)) ?? Screen.PrimaryScreen;
+            Location = new Point(screen.WorkingArea.Left + 25, screen.WorkingArea.Top + 25);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Padding = new Padding(16) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 132)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));

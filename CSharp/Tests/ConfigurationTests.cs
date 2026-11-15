@@ -8,6 +8,27 @@ namespace SimHub2SimRig.Tests
 {
     public static partial class TestProgram
     {
+        static void MonitorPlacement()
+        {
+            string directory = Prepare(root), path = Path.Combine(directory, "INI", HmiConfiguration.FileName);
+            string original = File.ReadAllText(path);
+            foreach (int number in new[] { 1, 2, 999 })
+            {
+                File.WriteAllText(path, original.Replace("monitor = 2", "monitor = " + number));
+                var ui = new SimHub2SimRig.HMI.UiContext(directory);
+                var expected = System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName == @"\\.\DISPLAY" + number) ?? System.Windows.Forms.Screen.PrimaryScreen;
+                using (var form = new SimHub2SimRig.HMI.MainForm(ui))
+                {
+                    Equal(System.Windows.Forms.FormStartPosition.Manual, form.StartPosition, "HMI uses the configured startup position");
+                    Equal(expected.WorkingArea.Left + 25, form.Left, "Selected monitor horizontal position, monitor=" + number);
+                    Equal(expected.WorkingArea.Top + 25, form.Top, "Selected monitor vertical position, monitor=" + number);
+                }
+            }
+            File.WriteAllText(path, original.Replace("monitor = 2", "monitor = 0"));
+            Throws<InvalidDataException>(() => new HmiConfiguration(directory), "Monitor numbers start at one");
+            File.WriteAllText(path, original.Replace("monitor = 2", ""));
+            Equal(2, new HmiConfiguration(directory).Monitor, "Existing HMI INIs default to monitor two");
+        }
         static void ConfigurationSeparation()
         {
             string comRoot = Prepare(root), hmiRoot = Prepare(root);

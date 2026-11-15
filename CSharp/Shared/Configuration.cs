@@ -34,6 +34,7 @@ namespace SimHub2SimRig.Shared
         }
         public IEnumerable<string> Sections { get { return data.Keys; } }
         public bool Has(string section) { return data.ContainsKey(section); }
+        public bool Has(string section, string key) { return data.ContainsKey(section) && data[section].ContainsKey(key); }
         public string Get(string section, string key) { return data[section][key].Replace("\\n", "\n"); }
         public double Number(string section, string key)
         {
@@ -147,10 +148,13 @@ namespace SimHub2SimRig.Shared
         public const string FileName = "SimHub2SimRigHMI.ini";
         public readonly string Root;
         public readonly Ini Ini;
+        public readonly int Monitor;
         public HmiConfiguration(string root)
         {
             Root = Path.GetFullPath(root);
             Ini = new Ini(Path.Combine(Root, "INI", FileName));
+            Monitor = Ini.Has("ui", "monitor") ? Ini.Int("ui", "monitor") : 2;
+            if (Monitor < 1) throw new InvalidDataException("ui.monitor must be at least 1");
             foreach (string key in new[] { "refresh_ms", "trigger_chart_refresh_ms", "trigger_chart_window_s", "trigger_chart_max_ms" })
                 if (Ini.Number("ui", key) <= 0) throw new InvalidDataException("Must be positive: ui." + key);
             Ini.Int("ui", "refresh_ms"); Ini.Int("ui", "trigger_chart_refresh_ms");

@@ -574,8 +574,6 @@ namespace SimHub2SimRig.Tests
         }
         static void RenderUi()
         {
-            System.Windows.Forms.Application.EnableVisualStyles();
-            System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
             var offlineContext = new SimHub2SimRig.HMI.UiContext(testRoot, "SimHub2SimRig.OfflineClose." + Guid.NewGuid().ToString("N"));
             foreach (System.Windows.Forms.Form form in new System.Windows.Forms.Form[] { new SimHub2SimRig.HMI.MainForm(offlineContext), new SimHub2SimRig.HMI.MaintenanceForm(offlineContext), new SimHub2SimRig.HMI.AnalysisForm(offlineContext) })
                 using (form)
@@ -829,11 +827,14 @@ namespace SimHub2SimRig.Tests
         [STAThread]
         public static int Main(string[] args)
         {
+            System.Windows.Forms.Application.EnableVisualStyles();
+            System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
             root = args[0]; testRoot = Prepare(root); config = new Configuration(testRoot);
             int binAt = Array.IndexOf(args, "--bin");
             binaryDirectory = binAt >= 0 ? args[binAt + 1] : Path.Combine(root, "CSharp", "bin");
             if (args.Contains("--configuration-only"))
             {
+                Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement);
                 Run("Independent Com and HMI configuration and IPC settings", ConfigurationSeparation);
                 Run("CSV compatibility, calibration, preview and playback conversion", CsvAndPersistence);
                 Run("Game telemetry budget and maintenance refresh", GameTelemetryBudget);
@@ -861,7 +862,7 @@ namespace SimHub2SimRig.Tests
                 Run("Sender scheduling and simulated bus contention", () => PerformanceBenchmarks(report));
                 return failures == 0 ? 0 : 1;
             }
-            if (args.Contains("--ui-only")) { Run("START waits for IPC connection before INIT", ComStartWorkflow); Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
+            if (args.Contains("--ui-only")) { Run("START waits for IPC connection before INIT", ComStartWorkflow); Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement); Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
             if (args.Contains("--console-only"))
             {
                 Run("Actual Com launcher and awaited shutdown", ExecutableLifecycle);
@@ -871,6 +872,7 @@ namespace SimHub2SimRig.Tests
                 return failures == 0 ? 0 : 1;
             }
             Oracle oracle = Json.Read<Oracle>(Path.Combine(root, "CSharp", "Tests", "reference.json"));
+            Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement);
             Run("Independent Com and HMI configuration and IPC settings", ConfigurationSeparation);
             Run("12,000 Python RTU frame vectors", () => {
                 foreach (FrameCase c in oracle.Frames) Equal(c.Hex, Hex(c.Operation == "read" ? Rtu.Read(c.Axis, c.Address, c.Values[0]) : c.Operation == "write" ? Rtu.Write(c.Axis, c.Address, c.Values[0]) : Rtu.Multi(c.Axis, c.Address, c.Values)), "RTU " + c.Operation);
