@@ -15,7 +15,7 @@ from statistics import median
 
 ROOT = Path(__file__).resolve().parents[2]
 CSV_DIR = ROOT / "SimHubData"
-INI_PATH = ROOT / "INI" / "SimHub2SimRig.ini"
+INI_PATH = ROOT / "INI" / "SimHub2SimRigCom.ini"
 SIMHUB_PATH = Path(r"C:\Program Files (x86)\SimHub\PluginsData\Common\MotionPlugin.GeneralSettingsV2.json")
 
 

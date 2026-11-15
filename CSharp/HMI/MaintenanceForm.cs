@@ -33,8 +33,8 @@ namespace SimHub2SimRig.HMI
                 table.Controls.Add(new Label { Text = ui.T("Common", groupKeys[group]), AutoSize = true, Font = new Font(Font, FontStyle.Bold) }, group, 0);
                 for (int row = 0; row < 4; row++)
                 {
-                    bool home = row == 3; int position = row == 0 ? ui.Config.RawMax : row == 1 ? ui.Config.RawMax / 2 : 0;
-                    var button = UiContext.Button(ui.T("Maintenance", keys[group][row]), async () => await ui.Command(this, new Request { Operation = home ? "home" : "move", FirstAxis = first, LastAxis = end, Position = position }));
+                    bool home = row == 3; int target = row;
+                    var button = UiContext.Button(ui.T("Maintenance", keys[group][row]), async () => await ui.Command(this, new Request { Operation = home ? "home" : "move", FirstAxis = first, LastAxis = end, Position = target == 0 ? ui.Status.RawPositionMax : target == 1 ? ui.Status.RawPositionMax / 2 : 0 }));
                     button.Dock = DockStyle.Fill; table.Controls.Add(button, group, row + 1); actions.Add(Tuple.Create(button, first, end, home));
                 }
                 homed[group] = new Label { AutoSize = true, Margin = new Padding(4, 10, 4, 10) }; table.Controls.Add(homed[group], group, 5);
@@ -67,7 +67,7 @@ namespace SimHub2SimRig.HMI
                 GreaseEntry entry = s.Grease[g == 3 ? "4-7" : first.ToString()]; DateTime date;
                 last[g].Text = ui.T("Panels", "grease_last") + ": " + (DateTime.TryParse(entry.lastGreaseAt, out date) ? date.ToString("dd.MM.yyyy HH:mm") : "—");
                 var elapsed = TimeSpan.FromMinutes(Math.Max(0, entry.playtimeMinutes)); runtime[g].Text = ui.T("Panels", "grease_playtime") + ": " + ((int)elapsed.TotalHours).ToString("00") + ":" + elapsed.Minutes.ToString("00");
-                runtime[g].BackColor = elapsed.TotalHours >= ui.Config.Ini.Number("grease", "alarm_after_operating_hours") ? Color.LightCoral : elapsed.TotalHours >= ui.Config.Ini.Number("grease", "warning_after_operating_hours") ? Color.Khaki : Color.Transparent;
+                runtime[g].BackColor = elapsed.TotalHours >= s.GreaseAlarmHours ? Color.LightCoral : elapsed.TotalHours >= s.GreaseWarningHours ? Color.Khaki : Color.Transparent;
             }
             status.Text = s.Connected ? ui.T("Maintenance", "simhub_locked") : s.Activity + "  " + s.LastError;
         }

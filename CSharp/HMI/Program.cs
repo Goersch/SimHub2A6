@@ -14,12 +14,12 @@ namespace SimHub2SimRig.HMI
 {
     public sealed class UiContext
     {
-        public readonly Configuration Config;
+        public readonly HmiConfiguration Config;
         public readonly Ini Language;
         public readonly ComClient Client;
         readonly string hmiSession = Guid.NewGuid().ToString("N");
         public Status Status;
-        public UiContext(string root, string pipeName = null) { Config = new Configuration(root); Language = new Ini(Config.PathFor("INI/Language.ini")); Client = new ComClient(pipeName); }
+        public UiContext(string root, string pipeName = null) { Config = new HmiConfiguration(root); Language = new Ini(Config.PathFor("INI/Language.ini")); Client = new ComClient(pipeName); }
         public string T(string section, string key) { return Language.Get(section, key); }
         public async Task<Reply> Call(Request request)
         {
@@ -59,6 +59,7 @@ namespace SimHub2SimRig.HMI
         StatusHistoryForm statusHistoryForm;
         string lastConnection, lastActivity, lastComMessage;
         readonly DataGridView motors = new DataGridView();
+        readonly Action fitMotorTable;
         readonly SenderIntervalChart timings;
         readonly RigView rig;
         readonly Timer refresh = new Timer();
@@ -93,7 +94,7 @@ namespace SimHub2SimRig.HMI
             clock.Font = new Font(Font.FontFamily, 14, FontStyle.Bold); clock.ForeColor = Color.Gray;
             clock.Text = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
             leftPanel.Controls.Add(clock, 0, 0);
-            rig = new RigView(ui) { Dock = DockStyle.Fill, RawMin = ui.Config.Ini.Int("simhub", "position_min"), RawMax = ui.Config.Ini.Int("simhub", "position_max") };
+            rig = new RigView(ui) { Dock = DockStyle.Fill };
             leftPanel.Controls.Add(rig, 0, 1); layout.Controls.Add(leftPanel, 0, 0); layout.SetRowSpan(leftPanel, 3);
             clockRefresh.Interval = 1000;
             clockRefresh.Tick += (s, e) => clock.Text = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
@@ -125,13 +126,27 @@ namespace SimHub2SimRig.HMI
             startCom.MinimumSize = initialize.MinimumSize;
             motorPanel.Controls.Add(startCom);
             layout.Controls.Add(motorPanel, 1, 0);
-            Action fitMotorTable = () => {
-                int height = Math.Max(initialize.MinimumSize.Height, motors.ColumnHeadersHeight + motors.Rows.GetRowsHeight(DataGridViewElementStates.Visible)) + motorPanel.Margin.Vertical;
-                if (layout.RowStyles[0].Height != height) layout.RowStyles[0].Height = height;
+            bool fittingMotorTable = false;
+            fitMotorTable = () => {
+                if (fittingMotorTable) return;
+                fittingMotorTable = true;
+                try
+                {
+                    // RowHeightChanged can run before the grid invalidates its
+                    // cached total height. Measure the rows directly, including
+                    // a little space below the final row for startup/DPI rounding.
+                    int rowsHeight = motors.Rows.Cast<DataGridViewRow>().Where(row => row.Visible).Sum(row => row.Height);
+                    int height = Math.Max(initialize.MinimumSize.Height, motors.ColumnHeadersHeight + rowsHeight + Math.Max(4, motors.Font.Height / 3)) + motorPanel.Margin.Vertical;
+                    if (layout.RowStyles[0].Height != height) layout.RowStyles[0].Height = height;
+                }
+                finally { fittingMotorTable = false; }
             };
             motors.RowHeightChanged += (s, e) => fitMotorTable();
             motors.ColumnHeadersHeightChanged += (s, e) => fitMotorTable();
             motors.FontChanged += (s, e) => fitMotorTable();
+            motors.Layout += (s, e) => fitMotorTable();
+            motors.VisibleChanged += (s, e) => fitMotorTable();
+            Shown += (s, e) => { motors.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells); fitMotorTable(); };
             fitMotorTable();
             var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke, ColumnCount = 4, RowCount = 3, Padding = new Padding(2) };
             for (int i = 0; i < 4; i++) actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
@@ -248,11 +263,18 @@ namespace SimHub2SimRig.HMI
         }
         void UpdateInitializationControls(bool initialized, bool canInitialize)
         {
+            bool showingMotors = initialized && !motors.Visible;
             bool showStart = comUnavailable && !startingCom;
             startCom.Visible = showStart; startCom.Enabled = showStart;
             if (showStart) startCom.BringToFront();
             initialize.Visible = !initialized && !showStart; initialize.Enabled = canInitialize && !startingCom;
             motors.Visible = initialized; motors.Enabled = rig.Enabled = timings.Enabled = initialized;
+            if (showingMotors)
+            {
+                motors.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells);
+                fitMotorTable();
+                motors.Parent.Parent.PerformLayout();
+            }
             foreach (Form dialog in OwnedForms) if (dialog != statusHistoryForm) dialog.Enabled = initialized;
             if (!initialized)
             {
@@ -296,7 +318,8 @@ namespace SimHub2SimRig.HMI
         {
                 comUnavailable = false;
                 ui.Status = status;
-                string summary = "SimHub2SimRigCom  |  " + (status.Simulated ? "SIMULATION  |  " : "") + "SimHub: " + (status.Connected ? "Connected" : "Disconnected") + (status.GameRunning ? "  /  Recording" : "");
+                rig.RawMin = status.SimHubPositionMin; rig.RawMax = status.SimHubPositionMax;
+                string summary = "SimHub2SimRigCom  |  " + (status.Simulated ? "SIMULATION  |  " : "") + "SimHub: " + (status.Connected ? "Connected" : "Disconnected") + (status.Recording ? "  /  Recording" : status.GameRunning ? "  /  Recording paused (unchanged data)" : "");
                 if (summary != lastConnection) { AddStatus(summary, true); lastConnection = summary; }
                 connection.ForeColor = status.Simulated ? Color.DarkOrange : status.Connected ? Color.ForestGreen : Color.SteelBlue;
                 BackColor = ColorTranslator.FromHtml(ui.Config.Ini.Get("ui", status.Connected ? "connected_background" : "disconnected_background"));
@@ -326,7 +349,7 @@ namespace SimHub2SimRig.HMI
                     row.Cells[3].Value = DriveStateView.Text(ui, axis, status);
                     string key = axis.Axis <= 3 ? axis.Axis.ToString() : "4-7";
                     double hours = status.Grease[key].playtimeMinutes / 60;
-                    row.Cells[4].Value = hours >= ui.Config.Ini.Number("grease", "alarm_after_operating_hours") ? ui.T("MainDialog", "grease_required") : hours >= ui.Config.Ini.Number("grease", "warning_after_operating_hours") ? ui.T("MainDialog", "grease_soon_required") : ui.T("Common", "status_ok");
+                    row.Cells[4].Value = hours >= status.GreaseAlarmHours ? ui.T("MainDialog", "grease_required") : hours >= status.GreaseWarningHours ? ui.T("MainDialog", "grease_soon_required") : ui.T("Common", "status_ok");
                     row.DefaultCellStyle.BackColor = DriveStateView.IsFault(axis) ? Color.MistyRose : axis.Axis == status.FixedAxis || DriveStateView.IsInhibited(axis) ? Color.LightGoldenrodYellow : Color.White;
                 }
                 rig.Status = status; rig.Invalidate();
@@ -395,7 +418,7 @@ namespace SimHub2SimRig.HMI
                 using (var single = new System.Threading.Mutex(true, "Local\\" + Protocol.PipeName + ".HMI", out created))
                 {
                     if (!created) throw new InvalidOperationException("SimHub2SimRigHMI läuft bereits.");
-                    try { Application.Run(new MainForm(new UiContext(Configuration.FindRoot(args)))); }
+                    try { Application.Run(new MainForm(new UiContext(Configuration.FindRoot(args, HmiConfiguration.FileName)))); }
                     finally { single.ReleaseMutex(); }
                 }
                 return 0;

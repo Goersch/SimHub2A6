@@ -104,7 +104,7 @@ The reference installation uses seven StepperOnline A6 750 W servo axes:
 
 Each A6 drive must have a unique Modbus slave ID matching its axis number. The
 default connection is 115200 baud over three RS-485 adapters. Change the COM
-ports and axis groups in `INI/SimHub2SimRig.ini` to match your wiring.
+ports and axis groups in `INI/SimHub2SimRigCom.ini` to match your wiring.
 
 The supplied reference geometry is:
 
@@ -149,7 +149,7 @@ python -m pip install --upgrade pip
 python -m pip install -r Python/requirements.txt
 ```
 
-Edit `INI/SimHub2SimRig.ini` before the first run. At minimum, verify every
+Edit `INI/SimHub2SimRigCom.ini` before the first run. At minimum, verify every
 `port`, `axes`, geometry, spindle pitch, stroke, zero offset, speed, and
 acceleration/deceleration value.
 
@@ -262,16 +262,19 @@ remove servo power before troubleshooting.
 
 ## Configuration and generated data
 
-- `INI/SimHub2SimRig.ini` contains serial, geometry, motion, leveling, greasing,
-  UI, and optional room-light settings.
+- `INI/SimHub2SimRigCom.ini` contains serial, geometry, motion, recording,
+  leveling, greasing, and telemetry settings.
+- `INI/SimHub2SimRigHMI.ini` contains display refresh, chart, color, and optional
+  room-light settings. HMI receives position ranges and grease thresholds from Com.
 - `INI/Language.ini` contains every user-visible dialog string.
 - `INI/grease_data.json`, `INI/leveling_offsets.json`, and
   `INI/simrig_load_values.json` are generated locally and intentionally ignored
   by Git. Neutral examples are available in `INI/examples/`.
 - `LOG/` and `SimHubData/` contain local logs and recordings and are ignored.
 
-The room-light URL in the checked-in INI is only a localhost example. Replace
-it with your own endpoint or do not use the light buttons.
+Set room-light options under `[room_light]` in the HMI INI or in the private
+`INI/room_light.ini` override. Use `uri` for the endpoint (with `{status}` for
+on/off) and `request_timeout_s` for its timeout.
 
 ## UDP protocol
 

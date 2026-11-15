@@ -17,7 +17,8 @@ class SharedPathsTests(unittest.TestCase):
         self.assertEqual(LOG_DIR, root / "LOG")
         self.assertEqual(SIMHUB_DATA_DIR, root / "SimHubData")
         paths = {
-            config.CONFIG_PATH: root / "INI" / "SimHub2SimRig.ini",
+            config.CONFIG_PATH: root / "INI" / "SimHub2SimRigCom.ini",
+            config.HMI_CONFIG_PATH: root / "INI" / "SimHub2SimRigHMI.ini",
             config.LOCAL_ROOM_LIGHT_CONFIG_PATH: root / "INI" / "room_light.ini",
             language.LANGUAGE_PATH: root / "INI" / "Language.ini",
             Grease.GREASE_DATA_FILE: root / "INI" / "grease_data.json",

@@ -79,6 +79,7 @@ namespace SimHub2SimRig.Com
     public sealed class Recorder : IDisposable
     {
         readonly Configuration config;
+        readonly Func<double> clock;
         public readonly object Gate = new object();
         readonly object writerGate = new object();
         public readonly SimAxis[] Axes;
@@ -88,12 +89,15 @@ namespace SimHub2SimRig.Com
         public double[] Center;
         public double[] CalibrationLoads;
         StreamWriter writer;
-        double lastFlush;
+        double lastFlush, lastSimHubChange;
+        int[] lastSimHubPositions;
         bool running, readActual;
+        volatile bool recording;
+        public bool IsRecording { get { return recording; } }
         public string CurrentFile { get; private set; }
-        public Recorder(Configuration config)
+        public Recorder(Configuration config, Func<double> clock = null)
         {
-            this.config = config; Axes = Enumerable.Range(0, 7).Select(_ => new SimAxis()).ToArray();
+            this.config = config; this.clock = clock ?? (() => Timing.Now); Axes = Enumerable.Range(0, 7).Select(_ => new SimAxis()).ToArray();
             int center = (int)(((long)config.Ini.Int("simhub", "position_min") + config.Ini.Int("simhub", "position_max")) / 2);
             foreach (SimAxis axis in Axes) axis.Raw = center;
             Center = new[] { config.Ini.Number("rig", "CenterOfGravityFront2Rear"), config.Ini.Number("rig", "CenterOfGravityLeft2Right") };
@@ -119,15 +123,27 @@ namespace SimHub2SimRig.Com
         public void ReadActual(bool enabled)
         { lock (Gate) { readActual = enabled; if (!enabled) { Array.Clear(actual, 0, 7); Array.Clear(actualAt, 0, 7); Array.Clear(actualDates, 0, 7); } } }
         public void SetActual(int axis, double mm)
-        { lock (Gate) if (readActual) { actual[axis - 1] = mm; actualAt[axis - 1] = Timing.Now; actualDates[axis - 1] = DateTime.Now; } }
+        { lock (Gate) if (readActual) { actual[axis - 1] = mm; actualAt[axis - 1] = clock(); actualDates[axis - 1] = DateTime.Now; } }
         public double[] ActualSnapshot() { lock (Gate) return (double[])actual.Clone(); }
+        public void ObserveSimHubPositions(int[] values)
+        {
+            // Compare raw UDP input, including changes too small to move a drive.
+            // Receiving identical packets or actual-position feedback is not activity.
+            lock (Gate)
+                if (lastSimHubPositions == null || !lastSimHubPositions.SequenceEqual(values))
+                { lastSimHubPositions = (int[])values.Clone(); lastSimHubChange = clock(); }
+        }
         public void SetRunning(bool value)
         {
             lock (writerGate)
             {
                 if (value && !running)
                 {
-                    lock (Gate) foreach (SimAxis a in Axes) { a.Position = a.Target; a.Velocity = 0; }
+                    lock (Gate)
+                    {
+                        lastSimHubPositions = null; lastSimHubChange = clock();
+                        foreach (SimAxis a in Axes) { a.Position = a.Target; a.Velocity = 0; }
+                    }
                     Start();
                 }
                 else if (!value && running) Close();
@@ -151,7 +167,7 @@ namespace SimHub2SimRig.Com
             foreach (string prefix in new[] { "Value", "TargetPosition", "CalculatedActualPosition", "ActualPosition", "ActualPositionTimestamp", "ActualPositionAgeMs", "ActualVelocity" })
                 header.AddRange(Enumerable.Range(1, 7).Select(a => prefix + a));
             foreach (string prefix in new[] { "GroundDeviation", "GroundLoad" }) header.AddRange(Enumerable.Range(4, 4).Select(a => prefix + a));
-            writer.WriteLine(string.Join(";", header)); writer.Flush(); lastFlush = Timing.Now; Log.Write("Recording " + CurrentFile);
+            writer.WriteLine(string.Join(";", header)); writer.Flush(); lastFlush = clock(); recording = true; Log.Write("Recording " + CurrentFile);
         }
         static string F(double v, string format = "F6") { return v.ToString(format, CultureInfo.InvariantCulture); }
         public void Tick(double dt)
@@ -159,6 +175,14 @@ namespace SimHub2SimRig.Com
             lock (writerGate)
             {
                 if (!running) return;
+                bool inactive;
+                lock (Gate) inactive = clock() - lastSimHubChange > 10;
+                if (inactive) { Close(); return; }
+                if (writer == null)
+                {
+                    lock (Gate) foreach (SimAxis a in Axes) { a.Position = a.Target; a.Velocity = 0; }
+                    Start();
+                }
                 SimAxis[] snapshot; double[] positions, sampledAt, center; DateTime?[] dates;
                 DateTime recordedAt; double now;
                 // The motion lock protects only a coherent state snapshot.
@@ -169,7 +193,7 @@ namespace SimHub2SimRig.Com
                     foreach (SimAxis axis in Axes) SimAxis.Advance(axis, dt);
                     snapshot = Axes.Select(a => new SimAxis { Raw = a.Raw, Target = a.Target, Position = a.Position, Velocity = a.Velocity }).ToArray();
                     positions = (double[])actual.Clone(); sampledAt = (double[])actualAt.Clone(); dates = (DateTime?[])actualDates.Clone(); center = (double[])Center.Clone();
-                    recordedAt = DateTime.Now; now = Timing.Now;
+                    recordedAt = DateTime.Now; now = clock();
                 }
                 double[][] ground = Geometry.State(config, Enumerable.Range(3, 4).Select(i => snapshot[i].Position - config.Axes[i].Zero).ToArray(), center);
                 var row = new List<string> { recordedAt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) };
@@ -205,7 +229,7 @@ namespace SimHub2SimRig.Com
             public double centerOfGravityFront2Rear { get; set; }
             public double centerOfGravityLeft2Right { get; set; }
         }
-        void Close() { if (writer != null) { writer.Dispose(); writer = null; Log.Write("Recording stopped"); } }
+        void Close() { if (writer != null) { writer.Dispose(); writer = null; recording = false; Log.Write("Recording stopped"); } }
         public void Dispose() { lock (writerGate) { Close(); running = false; } }
     }
     // Simulated drive replies travel through the same RTU encoder and workers.

@@ -8,6 +8,7 @@ from Python.LIB.a6_motion import app_units_from_mm, rpm_from_mm_per_second
 from Python.LIB.config import (
     CONFIG_PATH,
     GREASE_CONFIG,
+    HMI_CONFIG_PATH,
     MODBUS_CONFIG,
     RIG_CONFIG,
     ConfigurationError,
@@ -173,7 +174,7 @@ class ConfigAndMotionTests(unittest.TestCase):
             )
             loaded = load_configuration(test_ini)
 
-        self.assertEqual(CONFIG_PATH.name, "SimHub2SimRig.ini")
+        self.assertEqual(CONFIG_PATH.name, "SimHub2SimRigCom.ini")
         self.assertEqual(CONFIG_PATH.parent.name, "INI")
         self.assertEqual(loaded.modbus.baud, 57600)
 
@@ -187,6 +188,29 @@ class ConfigAndMotionTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ConfigurationError, "exactly one"):
                 load_configuration(test_ini)
+
+    def test_configuration_loads_hmi_and_com_settings_from_separate_files(self):
+        with TemporaryDirectory() as directory:
+            com_path = Path(directory) / "Com.ini"
+            hmi_path = Path(directory) / "HMI.ini"
+            com_path.write_text(
+                CONFIG_PATH.read_text(encoding="utf-8").replace(
+                    "axis_status_refresh_ms = 1000", "axis_status_refresh_ms = 1500"
+                ),
+                encoding="utf-8",
+            )
+            hmi_path.write_text(
+                HMI_CONFIG_PATH.read_text(encoding="utf-8").replace(
+                    "refresh_ms = 100", "refresh_ms = 250", 1
+                ),
+                encoding="utf-8",
+            )
+            loaded = load_configuration(com_path, hmi_path)
+            self.assertEqual(loaded.ui.refresh_ms, 250)
+            self.assertEqual(loaded.ui.axis_status_refresh_ms, 1500)
+            hmi_path.unlink()
+            with self.assertRaisesRegex(ConfigurationError, "HMI.ini"):
+                load_configuration(com_path, hmi_path)
 
     def test_disabled_axes_are_removed_from_active_modbus_connections(self):
         source = CONFIG_PATH.read_text(encoding="utf-8")

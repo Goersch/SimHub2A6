@@ -1,4 +1,4 @@
-"""Typed application configuration loaded from ``INI/SimHub2SimRig.ini``."""
+"""Legacy application configuration loaded from the Com and HMI INI files."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .paths import INI_DIR
 
-CONFIG_PATH = INI_DIR / "SimHub2SimRig.ini"
+CONFIG_PATH = INI_DIR / "SimHub2SimRigCom.ini"
+HMI_CONFIG_PATH = INI_DIR / "SimHub2SimRigHMI.ini"
 LOCAL_ROOM_LIGHT_CONFIG_PATH = INI_DIR / "room_light.ini"
 
 
@@ -260,13 +261,19 @@ def _axis_parameter_sections(
     return sections
 
 
-def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
-    """Load and validate a complete application configuration."""
+def load_configuration(
+    path: Path | str = CONFIG_PATH,
+    hmi_path: Path | str = HMI_CONFIG_PATH,
+) -> ApplicationConfig:
+    """Load both process configurations for the retained combined Python app."""
 
     ini_path = Path(path)
     parser = ConfigParser(interpolation=None)
     if not parser.read(ini_path, encoding="utf-8"):
         raise ConfigurationError(f"Configuration file not found: {ini_path}")
+    ui_parser = ConfigParser(interpolation=None)
+    if not ui_parser.read(hmi_path, encoding="utf-8"):
+        raise ConfigurationError(f"Configuration file not found: {hmi_path}")
 
     try:
         connection_count = parser.getint("modbus", "connection_count")
@@ -502,28 +509,28 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
             ),
         )
         ui_config = UiConfig(
-            refresh_ms=parser.getint("ui", "refresh_ms"),
+            refresh_ms=ui_parser.getint("ui", "refresh_ms"),
             axis_status_refresh_ms=parser.getint(
-                "ui", "axis_status_refresh_ms"
+                "control", "axis_status_refresh_ms"
             ),
-            trigger_chart_refresh_ms=parser.getint(
+            trigger_chart_refresh_ms=ui_parser.getint(
                 "ui", "trigger_chart_refresh_ms"
             ),
-            trigger_chart_window_s=parser.getfloat(
+            trigger_chart_window_s=ui_parser.getfloat(
                 "ui", "trigger_chart_window_s"
             ),
-            trigger_chart_max_ms=parser.getfloat("ui", "trigger_chart_max_ms"),
-            disconnected_background=parser.get(
+            trigger_chart_max_ms=ui_parser.getfloat("ui", "trigger_chart_max_ms"),
+            disconnected_background=ui_parser.get(
                 "ui", "disconnected_background"
             ),
-            connected_background=parser.get("ui", "connected_background"),
+            connected_background=ui_parser.get("ui", "connected_background"),
         )
 
         room_light_parser = ConfigParser(interpolation=None)
         if room_light_parser.read(LOCAL_ROOM_LIGHT_CONFIG_PATH, encoding="utf-8"):
             pass
-        elif parser.has_section("room_light"):
-            room_light_parser = parser
+        elif ui_parser.has_section("room_light"):
+            room_light_parser = ui_parser
         else:
             raise ConfigurationError(
                 f"Missing room-light config in {LOCAL_ROOM_LIGHT_CONFIG_PATH}"
@@ -538,7 +545,9 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
     except Exception as exc:
         if isinstance(exc, ConfigurationError):
             raise
-        raise ConfigurationError(f"Invalid configuration in {ini_path}: {exc}") from exc
+        raise ConfigurationError(
+            f"Invalid configuration in {ini_path} / {hmi_path}: {exc}"
+        ) from exc
 
     enabled_axes = {axis.axis_id for axis in axes if axis.enabled}
     routed_axes = [axis for connection in connections for axis in connection.axes]
@@ -617,7 +626,7 @@ def load_configuration(path: Path | str = CONFIG_PATH) -> ApplicationConfig:
         "DistanceFront2RearDrives": rig_config.distance_front_to_rear_drives_mm,
         "CenterOfGravityHeight": rig_config.center_of_gravity_height_mm,
         "ui.refresh_ms": ui_config.refresh_ms,
-        "ui.axis_status_refresh_ms": ui_config.axis_status_refresh_ms,
+        "control.axis_status_refresh_ms": ui_config.axis_status_refresh_ms,
         "room_light.request_timeout_s": room_light_config.request_timeout_s,
     }
     for name, value in positive_values.items():

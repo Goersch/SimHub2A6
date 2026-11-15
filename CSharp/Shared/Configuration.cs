@@ -61,6 +61,7 @@ namespace SimHub2SimRig.Shared
     public sealed class BusConfig { public string Port; public int[] Axes; }
     public sealed class Configuration
     {
+        public const string FileName = "SimHub2SimRigCom.ini";
         public readonly string Root;
         public readonly Ini Ini;
         public readonly AxisConfig[] Axes;
@@ -69,7 +70,7 @@ namespace SimHub2SimRig.Shared
         public Configuration(string root)
         {
             Root = Path.GetFullPath(root);
-            Ini = new Ini(Path.Combine(Root, "INI", "SimHub2SimRig.ini"));
+            Ini = new Ini(Path.Combine(Root, "INI", FileName));
             int count = Ini.Int("rig", "maximum_axes");
             if (count != 7) throw new InvalidDataException("Seven axes are required by the recording and geometry contracts");
             Axes = new AxisConfig[count];
@@ -113,7 +114,7 @@ namespace SimHub2SimRig.Shared
             Require(Ini.Number("motion_limits", "minimum_mm") < Ini.Number("motion_limits", "maximum_mm"), "Invalid motion limits");
             int hf = Ini.Int("control", "hub_axis_from"), ht = Ini.Int("control", "hub_axis_to");
             Require(hf == 4 && ht == 7, "Hub geometry requires axes 4..7");
-            foreach (var pair in new[] { "modbus:baud", "modbus:serial_timeout_s", "modbus:inter_frame_delay_s", "modbus:response_poll_delay_s", "modbus:queue_drain_timeout_s", "modbus:task_wait_timeout_s", "modbus:worker_join_timeout_s", "simhub:sender_cycle_s", "simhub:disconnect_timeout_s", "simulation:simulation_interval_s", "control:actual_position_poll_interval_s", "control:axis_wait_timeout_s", "control:homing_wait_timeout_s", "control:wait_poll_interval_s", "a6:operation_timeout_s", "a6:poll_interval_s", "motion_limits:reference_spindle_pitch_mm", "motion_limits:reference_app_units_per_mm", "rig:DistanceFrontDrivesLeft2Right", "rig:DistanceRearDrivesLeft2Right", "rig:DistanceFront2RearDrives", "rig:CenterOfGravityHeight", "leveling:load_rate_units_per_percent", "grease:position_poll_interval_s", "grease:move_timeout_s", "ui:refresh_ms" })
+            foreach (var pair in new[] { "modbus:baud", "modbus:serial_timeout_s", "modbus:inter_frame_delay_s", "modbus:response_poll_delay_s", "modbus:queue_drain_timeout_s", "modbus:task_wait_timeout_s", "modbus:worker_join_timeout_s", "simhub:sender_cycle_s", "simhub:disconnect_timeout_s", "simulation:simulation_interval_s", "control:actual_position_poll_interval_s", "control:axis_status_refresh_ms", "control:axis_wait_timeout_s", "control:homing_wait_timeout_s", "control:wait_poll_interval_s", "a6:operation_timeout_s", "a6:poll_interval_s", "motion_limits:reference_spindle_pitch_mm", "motion_limits:reference_app_units_per_mm", "rig:DistanceFrontDrivesLeft2Right", "rig:DistanceRearDrivesLeft2Right", "rig:DistanceFront2RearDrives", "rig:CenterOfGravityHeight", "leveling:load_rate_units_per_percent", "grease:position_poll_interval_s", "grease:move_timeout_s" })
             { string[] p = pair.Split(':'); Require(Ini.Number(p[0], p[1]) > 0, "Must be positive: " + pair); }
             Require(Ini.Int("leveling", "load_rate_samples") > 0 && Ini.Int("leveling", "verify_batches") > 0 && Ini.Int("leveling", "settle_checks") > 0, "Invalid leveling sample counts");
             Require(Ini.Ints("leveling", "offset_axes").SequenceEqual(new[] { 4, 5, 6, 7 }), "Leveling requires four hub axes");
@@ -132,13 +133,28 @@ namespace SimHub2SimRig.Shared
         public int Units(int axis, double mm) { return checked((int)Math.Round(mm * UnitsPerMm(axis), MidpointRounding.ToEven)); }
         public int PitchRpm(int axis, int rpm) { return (int)(rpm * Ini.Number("motion_limits", "reference_spindle_pitch_mm") / Axes[axis - 1].Pitch); }
         public int SpeedRpm(int axis, double speed) { return (int)(speed * 60.0 / Axes[axis - 1].Pitch); }
-        public static string FindRoot(string[] args)
+        public static string FindRoot(string[] args, string fileName = FileName)
         {
             int at = Array.IndexOf(args, "--root");
             if (at >= 0) { if (at + 1 >= args.Length) throw new ArgumentException("--root needs a directory"); return Path.GetFullPath(args[at + 1]); }
             var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
-            while (dir != null) { if (File.Exists(Path.Combine(dir.FullName, "INI", "SimHub2SimRig.ini"))) return dir.FullName; dir = dir.Parent; }
-            throw new DirectoryNotFoundException("INI/SimHub2SimRig.ini not found; pass --root <directory>");
+            while (dir != null) { if (File.Exists(Path.Combine(dir.FullName, "INI", fileName))) return dir.FullName; dir = dir.Parent; }
+            throw new DirectoryNotFoundException("INI/" + fileName + " not found; pass --root <directory>");
         }
+    }
+    public sealed class HmiConfiguration
+    {
+        public const string FileName = "SimHub2SimRigHMI.ini";
+        public readonly string Root;
+        public readonly Ini Ini;
+        public HmiConfiguration(string root)
+        {
+            Root = Path.GetFullPath(root);
+            Ini = new Ini(Path.Combine(Root, "INI", FileName));
+            foreach (string key in new[] { "refresh_ms", "trigger_chart_refresh_ms", "trigger_chart_window_s", "trigger_chart_max_ms" })
+                if (Ini.Number("ui", key) <= 0) throw new InvalidDataException("Must be positive: ui." + key);
+            Ini.Int("ui", "refresh_ms"); Ini.Int("ui", "trigger_chart_refresh_ms");
+        }
+        public string PathFor(string relative) { return Path.Combine(Root, relative); }
     }
 }

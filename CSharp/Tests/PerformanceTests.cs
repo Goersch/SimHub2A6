@@ -127,6 +127,7 @@ namespace SimHub2SimRig.Tests
                     motion = Task.Factory.StartNew(() => {
                         recorder.Stage(1, 25, 400, 100, 400, 80000); recorder.Trigger();
                         recorder.SetActual(1, 12); recorder.ActualSnapshot();
+                        recorder.ObserveSimHubPositions(new[] { 80000, 65535, 65535, 65535, 65535, 65535, 65535 });
                         lock (recorder.Gate) Equal(25.0, recorder.Axes[0].Target, "New target is committed while CSV write is blocked");
                     }, TaskCreationOptions.LongRunning);
                     Check(motion.Wait(1000), "Motion and HMI state remain accessible during an indefinitely blocked CSV write");

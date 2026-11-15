@@ -269,7 +269,7 @@ namespace SimHub2SimRig.Tests
             string path = config.PathFor("SimHubData/legacy.csv");
             File.WriteAllText(path, header + "\n2026-11-02 12:00:00.000;0;65535;131071;0;65535;131071;0\ninvalid\n2026-11-02 12:00:02.000;131071;65535;0;131071;65535;0;131071\n");
             Sample[] samples = recordings.Read("legacy.csv").ToArray(); Equal(2, samples.Length, "Legacy rows"); Near(-100, samples[0].Target[0], "Legacy conversion"); Near(2, samples[1].Seconds, "CSV timestamps");
-            Throws<ArgumentException>(() => recordings.Read("../INI/SimHub2SimRig.ini").ToArray(), "Path traversal");
+            Throws<ArgumentException>(() => recordings.Read("../INI/SimHub2SimRigCom.ini").ToArray(), "Path traversal");
             Throws<ArgumentException>(() => recordings.Read(path).ToArray(), "Absolute path");
             using (var recorder = new Recorder(config))
             {
@@ -332,7 +332,7 @@ namespace SimHub2SimRig.Tests
         static void Integration()
         {
             // Shorten only test settling/measurement settings in the isolated INI.
-            string iniPath = config.PathFor("INI/SimHub2SimRig.ini"); string text = File.ReadAllText(iniPath);
+            string iniPath = config.PathFor("INI/SimHub2SimRigCom.ini"); string text = File.ReadAllText(iniPath);
             text = text.Replace("load_rate_samples = 11", "load_rate_samples = 1").Replace("verify_batches = 5", "verify_batches = 1").Replace("settle_time_s = 2.0", "settle_time_s = 0.01").Replace("settle_check_delay_s = 0.4", "settle_check_delay_s = 0.01");
             File.WriteAllText(iniPath, text); var c = new Configuration(testRoot);
             var wires = new Dictionary<string, VirtualWire>();
@@ -406,7 +406,7 @@ namespace SimHub2SimRig.Tests
                         // the wire traffic across multiple complete status cycles.
                         Thread.Sleep(100);
                         int[] activeLoads = counts(loadReads), activeStates = counts(stateReads), activeActuals = counts(actualReads);
-                        double activeUntil = Timing.Now + 2 * c.Ini.Number("ui", "axis_status_refresh_ms") / 1000 + .5;
+                        double activeUntil = Timing.Now + 2 * c.Ini.Number("control", "axis_status_refresh_ms") / 1000 + .5;
                         while (Timing.Now < activeUntil) { udp.Send(packet, packet.Length, endpoint); Thread.Sleep(50); }
                         Check(engine.Snapshot().GameRunning, "SimHub stays active throughout polling check");
                         double[] received = client.Send(new Request { Operation = "status" }).Status.SimHubIntervals;
@@ -418,6 +418,21 @@ namespace SimHub2SimRig.Tests
                             Check(Volatile.Read(ref actualReads[i]) > activeActuals[i], "Actual feedback still polled while SimHub plays, axis " + (i + 1));
                         }
                         engine.Dispatch("POSITIONS -1 1 2 3 4 5 6;POSITIONS 1 2");
+                        string idleFile = engine.Recorder.CurrentFile;
+                        double idleDeadline = Timing.Now + 12;
+                        while (engine.Snapshot().Recording && Timing.Now < idleDeadline) { udp.Send(packet, packet.Length, endpoint); Thread.Sleep(50); }
+                        Status paused = client.Send(new Request { Operation = "status" }).Status;
+                        Check(!paused.Recording && paused.GameRunning && paused.Connected, "Identical UDP packets pause only recording after ten seconds");
+                        int idleRows = File.ReadAllLines(c.PathFor("SimHubData/" + idleFile)).Length;
+                        engine.Dispatch("START;POSITIONS -1 1 2 3 4 5 6;POSITIONS 1 2");
+                        udp.Send(packet, packet.Length, endpoint); Thread.Sleep(100);
+                        Check(!engine.Snapshot().Recording, "START, invalid data and identical packets leave recording paused");
+                        Check(!client.Send(new Request { Operation = "loads.save" }).Ok, "Recording pause preserves active-game interlocks");
+                        byte[] changed = System.Text.Encoding.ASCII.GetBytes("POSITIONS 65536 65535 65535 65535 65535 65535 65535");
+                        udp.Send(changed, changed.Length, endpoint);
+                        Until(() => engine.Snapshot().Recording, "A one-unit raw UDP change starts a new recording");
+                        Check(engine.Recorder.CurrentFile != idleFile, "Changed UDP data starts a separate CSV");
+                        Equal(idleRows, File.ReadAllLines(c.PathFor("SimHubData/" + idleFile)).Length, "Old CSV stays closed after resuming");
                         byte[] end = System.Text.Encoding.ASCII.GetBytes("END"); udp.Send(end, end.Length, endpoint); Until(() => !engine.Snapshot().GameRunning, "END stops recording");
                         Until(() => counts(loadReads).Zip(activeLoads, (now, baseline) => now > baseline).All(v => v), "Load polling resumes on every drive after END");
                         Check(engine.Snapshot().Connected, "Load polling resumes while SimHub is still connected but idle");
@@ -610,13 +625,19 @@ namespace SimHub2SimRig.Tests
                     // real handles/layout without appearing on the desktop.
                     form.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
                     form.Location = new System.Drawing.Point(-30000, -30000);
-                    form.ShowInTaskbar = false; form.Opacity = 0; form.Show(); form.PerformLayout();
+                    form.ShowInTaskbar = false; form.Opacity = 0; form.Show();
                     Check(form.Controls.Cast<System.Windows.Forms.Control>().All(c => c.IsHandleCreated), "Child control handles: " + name);
                     if (form is SimHub2SimRig.HMI.MainForm)
                     {
                         var mainGrid = Descendants(form).OfType<System.Windows.Forms.DataGridView>().Single(g => !(g is SimHub2SimRig.HMI.LogTable));
                         Equal(System.Windows.Forms.DataGridViewContentAlignment.MiddleCenter, mainGrid.DefaultCellStyle.Alignment, "Motor values are centered");
                         Equal(System.Windows.Forms.DataGridViewContentAlignment.MiddleCenter, mainGrid.ColumnHeadersDefaultCellStyle.Alignment, "Motor headers are centered");
+                        if (context.Status.Initialized)
+                        {
+                            Equal(7, mainGrid.DisplayedRowCount(false), "All seven axes fit immediately after startup: " + name);
+                            var lastRow = mainGrid.GetRowDisplayRectangle(6, false);
+                            Check(lastRow.Top >= mainGrid.ColumnHeadersHeight && lastRow.Bottom <= mainGrid.ClientSize.Height, "Axis seven is fully visible without a redraw: " + name);
+                        }
                         var mainButtons = Descendants(form).OfType<System.Windows.Forms.Button>().ToArray();
                         var init = mainButtons.Single(b => b.Text == "INIT");
                         var start = mainButtons.Single(b => b.Text == "START");
@@ -675,6 +696,22 @@ namespace SimHub2SimRig.Tests
             Check(Descendants(main).OfType<System.Windows.Forms.Button>().All(b => !b.Enabled), "HMI opens with controls disabled until Com status is known");
             main.UpdateStatus(status); capture(main, "main-init");
             main = new SimHub2SimRig.HMI.MainForm(context); main.Size = main.MinimumSize; main.UpdateStatus(status); capture(main, "main-init-minimum");
+            foreach (bool minimum in new[] { false, true })
+            {
+                status.Initialized = false;
+                using (var startup = new SimHub2SimRig.HMI.MainForm(context))
+                {
+                    if (minimum) startup.Size = startup.MinimumSize;
+                    startup.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+                    startup.Location = new System.Drawing.Point(-30000, -30000); startup.ShowInTaskbar = false; startup.Opacity = 0;
+                    startup.UpdateStatus(status); startup.Show();
+                    status.Initialized = true; startup.UpdateStatus(status);
+                    var startupGrid = Descendants(startup).OfType<System.Windows.Forms.DataGridView>().Single(g => !(g is SimHub2SimRig.HMI.LogTable));
+                    Equal(7, startupGrid.DisplayedRowCount(false), "First initialized status shows all axes without resizing, minimum=" + minimum);
+                    Check(startupGrid.GetRowDisplayRectangle(6, false).Bottom <= startupGrid.ClientSize.Height, "Last axis fits after INIT overlay disappears, minimum=" + minimum);
+                }
+            }
+            status.Initialized = false;
             status.Busy = true; status.Activity = "Initialization";
             main = new SimHub2SimRig.HMI.MainForm(context); main.UpdateStatus(status);
             Check(Descendants(main).OfType<System.Windows.Forms.Button>().All(b => !b.Enabled), "INIT and every action disabled during initialization");
@@ -782,10 +819,11 @@ namespace SimHub2SimRig.Tests
         static string Prepare(string repository)
         {
             string dir = Path.Combine(repository, "CSharp", "Tests", "work", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Path.Combine(dir, "INI"));
-            string ini = File.ReadAllText(Path.Combine(repository, "INI", "SimHub2SimRig.ini"));
+            string ini = File.ReadAllText(Path.Combine(repository, "INI", "SimHub2SimRigCom.ini"));
             int port; using (var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0))) port = ((IPEndPoint)udp.Client.LocalEndPoint).Port;
             ini = ini.Replace("udp_port = 9999", "udp_port = " + port);
-            File.WriteAllText(Path.Combine(dir, "INI", "SimHub2SimRig.ini"), ini);
+            File.WriteAllText(Path.Combine(dir, "INI", "SimHub2SimRigCom.ini"), ini);
+            File.Copy(Path.Combine(repository, "INI", HmiConfiguration.FileName), Path.Combine(dir, "INI", HmiConfiguration.FileName));
             File.Copy(Path.Combine(repository, "INI", "Language.ini"), Path.Combine(dir, "INI", "Language.ini")); return dir;
         }
         [STAThread]
@@ -794,6 +832,21 @@ namespace SimHub2SimRig.Tests
             root = args[0]; testRoot = Prepare(root); config = new Configuration(testRoot);
             int binAt = Array.IndexOf(args, "--bin");
             binaryDirectory = binAt >= 0 ? args[binAt + 1] : Path.Combine(root, "CSharp", "bin");
+            if (args.Contains("--configuration-only"))
+            {
+                Run("Independent Com and HMI configuration and IPC settings", ConfigurationSeparation);
+                Run("CSV compatibility, calibration, preview and playback conversion", CsvAndPersistence);
+                Run("Game telemetry budget and maintenance refresh", GameTelemetryBudget);
+                Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
+                return failures == 0 ? 0 : 1;
+            }
+            if (args.Contains("--recording-only"))
+            {
+                Run("SimHub recording inactivity, raw changes and separate CSV files", RecordingInactivity);
+                Run("Blocked CSV writes do not block motion or telemetry", RecordingDoesNotBlockMotion);
+                Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
+                return failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--performance-checks"))
             {
                 Run("High-resolution deadlines and shutdown cancellation", PrecisionTiming);
@@ -818,6 +871,7 @@ namespace SimHub2SimRig.Tests
                 return failures == 0 ? 0 : 1;
             }
             Oracle oracle = Json.Read<Oracle>(Path.Combine(root, "CSharp", "Tests", "reference.json"));
+            Run("Independent Com and HMI configuration and IPC settings", ConfigurationSeparation);
             Run("12,000 Python RTU frame vectors", () => {
                 foreach (FrameCase c in oracle.Frames) Equal(c.Hex, Hex(c.Operation == "read" ? Rtu.Read(c.Axis, c.Address, c.Values[0]) : c.Operation == "write" ? Rtu.Write(c.Axis, c.Address, c.Values[0]) : Rtu.Multi(c.Axis, c.Address, c.Values)), "RTU " + c.Operation);
             });
@@ -850,6 +904,7 @@ namespace SimHub2SimRig.Tests
             Run("COM retry cancellation and partial-port cleanup", PortOpenCancellation);
             Run("Three-bus queue barrier and failed-write trigger suppression", Barrier);
             Run("CSV compatibility, calibration, preview and playback conversion", CsvAndPersistence);
+            Run("SimHub recording inactivity, raw changes and separate CSV files", RecordingInactivity);
             Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
             Run("SimHub receive intervals, disconnect reset and bounded history", SimHubReceiveTimings);
             Run("Actual Com EXE, single instance and awaited shutdown", ExecutableLifecycle);

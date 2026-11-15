@@ -66,6 +66,12 @@ namespace SimHub2SimRig.Shared
         public bool Simulated { get; set; }
         public bool Connected { get; set; }
         public bool GameRunning { get; set; }
+        public bool Recording { get; set; }
+        public int SimHubPositionMin { get; set; }
+        public int SimHubPositionMax { get; set; }
+        public int RawPositionMax { get; set; }
+        public double GreaseWarningHours { get; set; }
+        public double GreaseAlarmHours { get; set; }
         public bool Initialized { get; set; }
         public bool Maintenance { get; set; }
         public bool Analysis { get; set; }

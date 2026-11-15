@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path (Join-Path $destination 'INI') -Force | Out-N
 foreach ($name in @('SimHub2SimRigCom.exe', 'SimHub2SimRigHMI.exe', 'SimHub2SimRig.Shared.dll', 'SimHub2SimRigCom.exe.config', 'SimHub2SimRigHMI.exe.config')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -Destination $destination
 }
-foreach ($name in @('SimHub2SimRig.ini', 'Language.ini')) {
+foreach ($name in @('SimHub2SimRigCom.ini', 'SimHub2SimRigHMI.ini', 'Language.ini')) {
     Copy-Item -LiteralPath (Join-Path $repository "INI/$name") -Destination (Join-Path $destination 'INI')
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $destination

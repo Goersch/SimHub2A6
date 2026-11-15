@@ -373,6 +373,7 @@ namespace SimHub2SimRig.Com
                         if (valid) for (int i = 0; i < 7; i++) if (!int.TryParse(tokens[i + 1], out values[i]) || values[i] < Config.Ini.Int("simhub", "position_min") || values[i] > Config.Ini.Int("simhub", "position_max")) { valid = false; break; }
                         if (!valid) { Log.Write("Invalid POSITIONS packet"); break; }
                         if (!game) SetGame(true);
+                        Recorder.ObserveSimHubPositions(values);
                         lock (latestGate) Array.Copy(values, latest, 7);
                         lock (MotionGate) if (!maintenance && !shutdown) armed = true; break;
                     case "START": SetGame(true); break;
@@ -488,7 +489,7 @@ namespace SimHub2SimRig.Com
                             // hub interlock; refresh homing again outside games.
                             bool? homed = game ? (bool?)null : Motion.Homed(axis);
                             lock (stateGate) { var t = telemetry[axis - 1]; if (load.HasValue) t.Load = load.Value / Config.Ini.Number("leveling", "load_rate_units_per_percent"); t.Error = fault; t.Servo = servo; if (homed.HasValue) t.Homed = homed.Value; }
-                            nextStatus = Timing.Now + Config.Ini.Number("ui", "axis_status_refresh_ms") / 1000 / axes.Length;
+                            nextStatus = Timing.Now + Config.Ini.Number("control", "axis_status_refresh_ms") / 1000 / axes.Length;
                         }
                     }
                     catch (Exception e) { Log.Write("Telemetry axis " + axis + ": " + e.Message); }
@@ -507,7 +508,7 @@ namespace SimHub2SimRig.Com
             int[] positions; lock (latestGate) positions = (int[])latest.Clone();
             double[] center, loads; lock (Recorder.Gate) { center = (double[])Recorder.Center.Clone(); loads = Recorder.CalibrationLoads == null ? null : (double[])Recorder.CalibrationLoads.Clone(); }
             string[] messages = Log.Recent();
-            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, SimHubIntervals = receiveTiming, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
+            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Recording = Recorder.IsRecording, SimHubPositionMin = Config.Ini.Int("simhub", "position_min"), SimHubPositionMax = Config.Ini.Int("simhub", "position_max"), RawPositionMax = Config.RawMax, GreaseWarningHours = Config.Ini.Number("grease", "warning_after_operating_hours"), GreaseAlarmHours = Config.Ini.Number("grease", "alarm_after_operating_hours"), Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, SimHubIntervals = receiveTiming, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
         }
         public void ArmPlayback() { armed = true; SetGame(false); }
         static readonly int[][] Groups = { new[] { 1, 1 }, new[] { 2, 2 }, new[] { 3, 3 }, new[] { 4, 7 } };

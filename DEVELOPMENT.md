@@ -37,6 +37,9 @@ repository root; `Python/LIB/paths.py` resolves them independently of the curren
 working directory. Start the Python application from the root with
 `python -m Python.SimHub2SimRig`.
 
-Runtime settings are stored in `INI/SimHub2SimRig.ini`. The application loads and
-validates this file when the package starts. Restart the application after
-changing serial ports, axis parameters, timing values or UI settings.
+Com settings are stored in `INI/SimHub2SimRigCom.ini`; HMI display settings are
+stored in `INI/SimHub2SimRigHMI.ini`. Each process loads and validates only its
+own configuration at startup. Restart the affected process after changing its
+settings. Axis-status polling belongs to `[control]` in the Com INI. HMI receives
+position ranges and grease thresholds through Com status messages. The retained
+Python reference loads both files.

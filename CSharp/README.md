@@ -90,7 +90,7 @@ Homing-/Positionierablauf aus. Währenddessen zeigt das HMI den Fortschritt und
 sperrt auch den INIT-Button. Nach erfolgreichem Abschluss erscheint die normale
 Achsentabelle und die Bedienung wird freigegeben. Schlägt die Initialisierung
 fehl, bleiben die übrigen Funktionen gesperrt und INIT kann erneut angefordert
-werden. Die INI wird beim Programmstart geladen; Änderungen an Ports,
+werden. Die jeweilige INI wird beim Programmstart geladen; Änderungen an Ports,
 Geometrie oder Bewegungsparametern erfordern einen Neustart.
 
 Bis zum erfolgreichen Abschluss der Initialisierung verwirft Com alle
@@ -105,7 +105,7 @@ zeigen dabei zum Beispiel `COM Error (COM6) - I try again in 10 seconds` und
 die Fehlerursache. Erst wenn alle Ports geöffnet sind, beginnt die
 Antriebsinitialisierung. Das Beenden von Com unterbricht die Wartezeit sofort.
 
-Beide Programme suchen `INI/SimHub2SimRig.ini` ausgehend vom EXE-Verzeichnis in den übergeordneten Verzeichnissen. Alternativ lässt sich das Datenverzeichnis explizit angeben:
+Com sucht `INI/SimHub2SimRigCom.ini`, HMI sucht `INI/SimHub2SimRigHMI.ini`, jeweils ausgehend vom EXE-Verzeichnis in den übergeordneten Verzeichnissen. Jedes Programm lädt nur seine eigene Konfiguration. Alternativ lässt sich das Datenverzeichnis explizit angeben:
 
 ```powershell
 .\CSharp\bin\SimHub2SimRigCom.exe --root H:\SimHub2SimRig
@@ -123,6 +123,14 @@ Nach einem erkannten SimHub-Verbindungs-Timeout beginnt mit dem nächsten
 Telegramm eine neue Abstandsfolge; die bisherige Historie bleibt erhalten.
 Auch vor INIT wird der Empfangsabstand gemessen, ohne die Telegrammbefehle
 auszuführen oder Verbindungs- und Aufzeichnungszustand zu ändern.
+
+Bleiben alle sieben Rohwerte gültiger SimHub-`POSITIONS`-Telegramme länger als
+zehn Sekunden unverändert, schließt Com die aktuelle CSV-Aufzeichnung.
+Identische Telegramme und wiederholte `START`-Befehle starten sie nicht erneut.
+Sobald sich mindestens ein Rohwert ändert, beginnt automatisch eine neue
+CSV-Datei. Die SimHub-Verbindung, Bewegungssteuerung und Spiel-Sperren bleiben
+während dieser Aufzeichnungspause aktiv; `END` und Verbindungsabbruch beenden
+die Sitzung weiterhin. Das HMI zeigt die Aufzeichnungspause im Status an.
 
 Über dem HMI-Diagramm wählen die RadioButtons **SimHub**, **ModBus** und
 **Beide** die sichtbaren Messreihen aus. Standard ist **Beide**: SimHub erscheint
@@ -212,7 +220,7 @@ Hintergrund zur kurzen Windows-Frist für Konsolen-Close-Handler:
 .\CSharp\bin\SimHub2SimRigHMI.exe --root <separates-Testverzeichnis>
 ```
 
-In das Testverzeichnis vorher `INI/SimHub2SimRig.ini` und `INI/Language.ini` kopieren. `--simulate` konstruiert keine seriellen Ports. Die simulierten Antriebe verarbeiten echte RTU-Bytefolgen; Com, UDP, HMI, Aufzeichnung und Playback laufen ansonsten unverändert. Das HMI kennzeichnet diesen Betrieb mit `SIMULATION`. Die Antriebssimulation quittiert Bewegungen unmittelbar; die separat aufgezeichnete Trapezsimulation entspricht der Python-Berechnung.
+In das Testverzeichnis vorher `INI/SimHub2SimRigCom.ini`, `INI/SimHub2SimRigHMI.ini` und `INI/Language.ini` kopieren. `--simulate` konstruiert keine seriellen Ports. Die simulierten Antriebe verarbeiten echte RTU-Bytefolgen; Com, UDP, HMI, Aufzeichnung und Playback laufen ansonsten unverändert. Das HMI kennzeichnet diesen Betrieb mit `SIMULATION`. Die Antriebssimulation quittiert Bewegungen unmittelbar; die separat aufgezeichnete Trapezsimulation entspricht der Python-Berechnung.
 
 Simulation schreibt ebenfalls JSON-Zustand und CSV-Dateien und wendet die Aufbewahrungsfrist an. Ein eigenes Testverzeichnis hält diese Daten vom produktiven Zustand getrennt. Pro Windows-Benutzer darf genau eine Com-Instanz laufen, einschließlich Simulation.
 
@@ -220,11 +228,12 @@ Simulation schreibt ebenfalls JSON-Zustand und CSV-Dateien und wendet die Aufbew
 
 Die bestehenden Formate werden weiterverwendet:
 
-- `INI/SimHub2SimRig.ini`: Ports, Achsenparameter, Geometrie, Zeitvorgaben und UI-Einstellungen.
+- `INI/SimHub2SimRigCom.ini`: Ports, Achsenparameter, Geometrie, Bewegung, Aufzeichnung, Leveling, Schmierung und Telemetrie. `axis_status_refresh_ms` steht unter `[control]`.
+- `INI/SimHub2SimRigHMI.ini`: Anzeigeaktualisierung, Diagramme, Farben und optionale Raumlicht-Einstellungen. Positionierungsbereiche und Schmierungswarnschwellen liefert Com per IPC; HMI benötigt keine Com-INI.
 - `INI/Language.ini`: vorhandene Dialogtexte.
 - `INI/leveling_offsets.json`, `INI/grease_data.json`, `INI/simrig_load_values.json`: bestehender persistenter Zustand; Schreiben erfolgt über eine temporäre Datei mit atomarem Austausch.
 - `SimHubData/*.csv`: bisherige und neue Aufzeichnungsformate; neue Dateien enthalten dieselben 58 Spalten einschließlich Istpositions-Zeitstempel, Alter und Bodenlasten.
-- `INI/room_light.ini`: private Lichtkonfiguration; alternativ `[room_light]` in der zentralen INI. Der Platzhalter `{status}` wird durch `0` oder `1` ersetzt. Nur das HMI ruft die URL auf.
+- `INI/room_light.ini`: private Lichtkonfiguration; alternativ `[room_light]` in der HMI-INI. Der Platzhalter `{status}` wird durch `0` oder `1` ersetzt. Nur das HMI ruft die URL auf.
 
 Die Spalte **State** wertet `U40.43` wie die Python-Version aus: `0` und `5`
 werden als `OK` angezeigt, `1` als `Servo off`, `2` als `Ready / stopped`,
