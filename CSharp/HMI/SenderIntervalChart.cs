@@ -35,10 +35,25 @@ namespace SimHub2SimRig.HMI
             area.AxisY.LabelStyle.Format = "0";
             area.AxisX.MajorGrid.LineColor = area.AxisY.MajorGrid.LineColor = Color.Gainsboro;
             ChartAreas.Add(area);
-            Series.Add(new Series("Sender") { ChartType = SeriesChartType.FastLine, Color = Color.SteelBlue });
+            Series.Add(new Series("ModBus") { ChartType = SeriesChartType.FastLine, Color = Color.SteelBlue });
+            Series.Add(new Series("SimHub") { ChartType = SeriesChartType.FastLine, Color = Color.DarkOrange });
         }
 
-        public void SetSamples(double[] intervalsMs)
+        public void SetVisibleSources(bool simHub, bool modBus)
+        {
+            Series["SimHub"].Enabled = simHub;
+            Series["ModBus"].Enabled = modBus;
+            Invalidate();
+        }
+
+        public void SetSamples(double[] modBusIntervalsMs, double[] simHubIntervalsMs = null)
+        {
+            SetPoints(Series["ModBus"], modBusIntervalsMs);
+            SetPoints(Series["SimHub"], simHubIntervalsMs);
+            Invalidate();
+        }
+
+        void SetPoints(Series series, double[] intervalsMs)
         {
             // Anchor the newest measurement at zero. Both axis limits and tick
             // spacing stay fixed while the rolling history grows or drains.
@@ -55,7 +70,7 @@ namespace SimHub2SimRig.HMI
                     x -= interval / 1000;
                 }
             points.Reverse();
-            var target = Series[0].Points;
+            var target = series.Points;
             target.SuspendUpdates();
             try
             {
@@ -63,7 +78,6 @@ namespace SimHub2SimRig.HMI
                 foreach (DataPoint point in points) target.Add(point);
             }
             finally { target.ResumeUpdates(); }
-            Invalidate();
         }
     }
 }

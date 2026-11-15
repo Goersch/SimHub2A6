@@ -74,7 +74,8 @@ Com zuerst starten; in einem zweiten Terminal das HMI starten:
 
 Com und HMI können unabhängig gestartet werden. Ist Com beim Start des HMI
 nicht erreichbar, erscheint **START** über dem INIT-Button. Ein Klick startet
-Com und blendet START aus. Sobald eine erfolgreiche IPC-Statusabfrage die
+Com mit der Windows-Prozesspriorität **Hoch (High)** und blendet START aus.
+Sobald eine erfolgreiche IPC-Statusabfrage die
 Verbindung bestätigt, fordert das HMI automatisch einmal **INIT** an; eine
 feste Wartezeit gibt es nicht. Ohne Klick wird Com nicht gestartet. Ist Com
 bereits erreichbar, bleibt der bisherige manuelle INIT-Ablauf verfügbar.
@@ -112,8 +113,23 @@ Beide Programme suchen `INI/SimHub2SimRig.ini` ausgehend vom EXE-Verzeichnis in 
 ```
 
 Im aktiven Modus laufen Hub-Statusüberwachung und Sender-Zeitmessung auch ohne
-geöffnetes HMI weiter. Das erneute Öffnen des HMI übernimmt die vorhandene
-Messhistorie und den aktuellen Betriebszustand von Com.
+geöffnetes HMI weiter. Zusätzlich misst Com direkt nach jedem UDP-Empfang den
+Abstand zum vorherigen SimHub-Telegramm in Millisekunden, vor Verarbeitung und
+Bewegungssperren. Beide Messreihen halten jeweils bis zu 6.000 Werte im
+Arbeitsspeicher von Com vor; eine Speicherung auf Platte erfolgt wie bisher
+nicht. Das erneute Öffnen des HMI übernimmt beide Messhistorien und den
+aktuellen Betriebszustand von Com. Nach einem Com-Neustart sind die Caches leer.
+Nach einem erkannten SimHub-Verbindungs-Timeout beginnt mit dem nächsten
+Telegramm eine neue Abstandsfolge; die bisherige Historie bleibt erhalten.
+Auch vor INIT wird der Empfangsabstand gemessen, ohne die Telegrammbefehle
+auszuführen oder Verbindungs- und Aufzeichnungszustand zu ändern.
+
+Über dem HMI-Diagramm wählen die RadioButtons **SimHub**, **ModBus** und
+**Beide** die sichtbaren Messreihen aus. Standard ist **Beide**: SimHub erscheint
+orange, ModBus blau. Die Auswahl ändert nur die Anzeige; beide Caches werden
+weiter gefüllt. Zeitfenster, Aktualisierungstakt und feste Millisekundenachse
+bleiben für beide Kurven gleich. Jede Kurve verankert ihren neuesten Messwert
+bei null, entsprechend der bisherigen Darstellung des Senderdiagramms.
 
 Die Statusausgabe steht am unteren Rand des HMI über die gesamte Fensterbreite
 und zeigt die letzten drei Meldungen als Tabelle mit den Spalten **Datum**,

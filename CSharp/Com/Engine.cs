@@ -26,7 +26,7 @@ namespace SimHub2SimRig.Com
         readonly object stateGate = new object(), jobGate = new object(), latestGate = new object(), greaseGate = new object(), commandGate = new object();
         readonly Func<BusConfig, IWire> wireFactory;
         readonly HashSet<int> maintenancePlanners = new HashSet<int>(), faultAxes = new HashSet<int>();
-        readonly Queue<double> intervals = new Queue<double>();
+        readonly Queue<double> intervals = new Queue<double>(), simHubIntervals = new Queue<double>();
         readonly object hmiGate = new object();
         readonly Dictionary<Guid, double> hmiSessions = new Dictionary<Guid, double>();
         readonly List<Task> loops = new List<Task>();
@@ -386,21 +386,27 @@ namespace SimHub2SimRig.Com
         }
         void ReceiveLoop()
         {
-            double last = 0;
+            double last = 0, previousReceive = 0;
             while (!Stop.IsSet)
             {
                 try
                 {
                     IPEndPoint from = new IPEndPoint(IPAddress.Any, 0); byte[] bytes = udp.Receive(ref from);
+                    // Timestamp each datagram immediately, before decoding or
+                    // motion locks. Retain the same bounded history as ModBus.
+                    double received = Timing.Now;
+                    if (previousReceive != 0) lock (stateGate) { simHubIntervals.Enqueue((received - previousReceive) * 1000); while (simHubIntervals.Count > 6000) simHubIntervals.Dequeue(); }
+                    previousReceive = received;
                     // Drain and discard pre-INIT datagrams, including START and
                     // SHUTDOWN. They must not set connection/recording state or
                     // become stale motion targets once initialization finishes.
                     if (!initialized || initializing) continue;
-                    last = Timing.Now; connected = true; Dispatch(System.Text.Encoding.UTF8.GetString(bytes), from);
+                    last = received; connected = true; Dispatch(System.Text.Encoding.UTF8.GetString(bytes), from);
                 }
                 catch (SocketException e)
                 {
                     if (e.SocketErrorCode != SocketError.TimedOut) { if (!Stop.IsSet) Report(e); break; }
+                    if (Timing.Now - previousReceive >= Config.Ini.Number("simhub", "disconnect_timeout_s")) previousReceive = 0;
                     if (connected && Timing.Now - last >= Config.Ini.Number("simhub", "disconnect_timeout_s")) { connected = false; SetGame(false); }
                 }
                 catch (ObjectDisposedException) { break; }
@@ -497,11 +503,11 @@ namespace SimHub2SimRig.Com
             double[] actual = Recorder.ActualSnapshot();
             lock (Recorder.Gate) for (int i = 0; i < 7; i++) { states[i].Target = Recorder.Axes[i].Target - Config.Axes[i].Zero; states[i].Calculated = Recorder.Axes[i].Position - Config.Axes[i].Zero; states[i].Velocity = Recorder.Axes[i].Velocity; states[i].Actual = actual[i]; }
             Dictionary<string, GreaseEntry> g; lock (greaseGate) g = grease.ToDictionary(p => p.Key, p => new GreaseEntry { lastGreaseAt = p.Value.lastGreaseAt, playtimeMinutes = p.Value.playtimeMinutes });
-            double[] timing; lock (stateGate) timing = intervals.ToArray();
+            double[] timing, receiveTiming; lock (stateGate) { timing = intervals.ToArray(); receiveTiming = simHubIntervals.ToArray(); }
             int[] positions; lock (latestGate) positions = (int[])latest.Clone();
             double[] center, loads; lock (Recorder.Gate) { center = (double[])Recorder.Center.Clone(); loads = Recorder.CalibrationLoads == null ? null : (double[])Recorder.CalibrationLoads.Clone(); }
             string[] messages = Log.Recent();
-            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
+            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, SimHubIntervals = receiveTiming, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
         }
         public void ArmPlayback() { armed = true; SetGame(false); }
         static readonly int[][] Groups = { new[] { 1, 1 }, new[] { 2, 2 }, new[] { 3, 3 }, new[] { 4, 7 } };

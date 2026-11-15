@@ -85,6 +85,7 @@ namespace SimHub2SimRig.Shared
         public AxisStatus[] Axes { get; set; }
         public Dictionary<string, GreaseEntry> Grease { get; set; }
         public double[] TriggerIntervals { get; set; }
+        public double[] SimHubIntervals { get; set; }
         public int[] LatestPositions { get; set; }
         public double[] LoadCenter { get; set; }
         public double[] CalibrationLoads { get; set; }

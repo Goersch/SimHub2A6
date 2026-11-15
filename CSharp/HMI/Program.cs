@@ -171,7 +171,22 @@ namespace SimHub2SimRig.HMI
             modePanel.Controls.Add(modeFlow); actions.Controls.Add(modePanel, 3, 0); actions.SetRowSpan(modePanel, 3);
             layout.Controls.Add(actions, 1, 1);
             timings = new SenderIntervalChart(ui.Config.Ini.Number("ui", "trigger_chart_window_s"));
-            layout.Controls.Add(timings, 1, 2);
+            var timingPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+            timingPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            timingPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            timingPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var timingSources = new FlowLayoutPanel { Name = "timingSources", Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+            timingSources.Controls.Add(new Label { Text = "Telegrammabstand:", AutoSize = true, Margin = new Padding(3, 5, 10, 0) });
+            foreach (string source in new[] { "SimHub", "ModBus", "Beide" })
+            {
+                string selected = source;
+                var radio = new RadioButton { Name = "chart" + source, Text = source, AutoSize = true, Checked = source == "Beide", ForeColor = source == "SimHub" ? Color.DarkOrange : source == "ModBus" ? Color.SteelBlue : SystemColors.ControlText };
+                radio.CheckedChanged += (s, e) => { if (radio.Checked) timings.SetVisibleSources(selected != "ModBus", selected != "SimHub"); };
+                timingSources.Controls.Add(radio);
+            }
+            timingPanel.Controls.Add(timingSources, 0, 0);
+            timingPanel.Controls.Add(timings, 0, 1);
+            layout.Controls.Add(timingPanel, 1, 2);
             UpdateInitializationControls(false, false);
             refresh.Interval = Math.Max(50, ui.Config.Ini.Int("ui", "refresh_ms")); refresh.Tick += async (s, e) => await Poll(); refresh.Start();
             Shown += async (s, e) => await Poll();
@@ -194,9 +209,12 @@ namespace SimHub2SimRig.HMI
                         string root = ui.Config.Root;
                         int trailing = root.Length - root.TrimEnd('\\').Length;
                         string quotedRoot = "\"" + root + new string('\\', trailing) + "\"";
-                        var process = Process.Start(new ProcessStartInfo(executable, "--root " + quotedRoot) { WorkingDirectory = root, UseShellExecute = true, WindowStyle = ProcessWindowStyle.Normal });
-                        if (process == null) throw new InvalidOperationException("Com konnte nicht gestartet werden.");
-                        process.Dispose(); AddStatus("Com gestartet – warte auf Verbindung.", true);
+                        using (var process = Process.Start(new ProcessStartInfo(executable, "--root " + quotedRoot) { WorkingDirectory = root, UseShellExecute = true, WindowStyle = ProcessWindowStyle.Normal }))
+                        {
+                            if (process == null) throw new InvalidOperationException("Com konnte nicht gestartet werden.");
+                            process.PriorityClass = ProcessPriorityClass.High;
+                        }
+                        AddStatus("Com mit Priorität Hoch gestartet – warte auf Verbindung.", true);
                     }, async () => {
                         AddStatus("Verbindung zu Com steht – INIT wird angefordert.", true);
                         await ui.Call(new Request { Operation = "initialize" });
@@ -314,7 +332,7 @@ namespace SimHub2SimRig.HMI
                 rig.Status = status; rig.Invalidate();
                 if (++chartTick * refresh.Interval >= ui.Config.Ini.Int("ui", "trigger_chart_refresh_ms"))
                 {
-                    chartTick = 0; timings.SetSamples(status.TriggerIntervals);
+                    chartTick = 0; timings.SetSamples(status.TriggerIntervals, status.SimHubIntervals);
                 }
                 if (maintenanceForm != null && !maintenanceForm.IsDisposed) maintenanceForm.UpdateStatus(status);
                 if (analysisForm != null && !analysisForm.IsDisposed) analysisForm.UpdateStatus(status);

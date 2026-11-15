@@ -295,6 +295,40 @@ namespace SimHub2SimRig.Tests
                 Equal(raw, Playback.RawFromTarget(config, a, mm, offset), "Playback zero/leveling inverse");
             }
         }
+        static void SimHubReceiveTimings()
+        {
+            var c = new Configuration(Prepare(root));
+            using (var engine = new Engine(c, true))
+            using (var sender = new UdpClient())
+            {
+                engine.Start();
+                var endpoint = new IPEndPoint(IPAddress.Loopback, c.Ini.Int("simhub", "udp_port"));
+                byte[] packet = System.Text.Encoding.ASCII.GetBytes("END");
+                Action send = () => sender.Send(packet, packet.Length, endpoint);
+                Equal(0, engine.Snapshot().SimHubIntervals.Length, "Receive history starts empty");
+                send(); Thread.Sleep(150);
+                Equal(0, engine.Snapshot().SimHubIntervals.Length, "First datagram has no interval");
+                send(); Until(() => engine.Snapshot().SimHubIntervals.Length == 1, "Second datagram produces one receive interval");
+                double measured = engine.Snapshot().SimHubIntervals[0];
+                Check(measured >= 100 && measured < 1000, "Receive interval measures elapsed milliseconds between UDP datagrams");
+                Status retained = engine.Snapshot();
+                Check(!retained.Connected && !retained.GameRunning && !retained.Initialized, "Receive timing does not bypass INIT interlocks");
+                Thread.Sleep((int)(c.Ini.Number("simhub", "disconnect_timeout_s") * 1000) + 650);
+                send(); Thread.Sleep(100);
+                Equal(1, engine.Snapshot().SimHubIntervals.Length, "First datagram after disconnect starts a new interval sequence");
+                for (int batch = 1; batch <= 59; batch++)
+                {
+                    for (int i = 0; i < 100; i++) send();
+                    int expected = 1 + batch * 100;
+                    Until(() => engine.Snapshot().SimHubIntervals.Length == expected, "Receive cache collects UDP batch " + batch);
+                }
+                for (int i = 0; i < 200; i++) send();
+                Until(() => engine.Snapshot().SimHubIntervals.Length == 6000, "Receive cache retains at most 6000 intervals");
+                Thread.Sleep(100);
+                Equal(6000, engine.Snapshot().SimHubIntervals.Length, "Receive cache stays bounded after overflow");
+                Equal(1, retained.SimHubIntervals.Length, "Snapshots own immutable copies of receive history");
+            }
+        }
         static void Integration()
         {
             // Shorten only test settling/measurement settings in the isolated INI.
@@ -375,6 +409,8 @@ namespace SimHub2SimRig.Tests
                         double activeUntil = Timing.Now + 2 * c.Ini.Number("ui", "axis_status_refresh_ms") / 1000 + .5;
                         while (Timing.Now < activeUntil) { udp.Send(packet, packet.Length, endpoint); Thread.Sleep(50); }
                         Check(engine.Snapshot().GameRunning, "SimHub stays active throughout polling check");
+                        double[] received = client.Send(new Request { Operation = "status" }).Status.SimHubIntervals;
+                        Check(received.Length > 1 && received.All(v => v >= 0), "IPC carries SimHub receive intervals in milliseconds");
                         for (int i = 0; i < 7; i++)
                         {
                             Equal(activeLoads[i], Volatile.Read(ref loadReads[i]), "No load register reads while SimHub plays, axis " + (i + 1));
@@ -466,7 +502,7 @@ namespace SimHub2SimRig.Tests
                     Equal(detachedTargets, Volatile.Read(ref targetWrites), "Stationary targets are not repeatedly rewritten without HMI");
                     Equal(detachedTriggers, Volatile.Read(ref triggerWrites), "Idle sender does not emit movement triggers after detach");
                     Status reattached = new ComClient(pipeName).Send(new Request { Operation = "status" }).Status;
-                    Check(reattached.Initialized && reattached.TriggerIntervals.Length > 0, "Restarted HMI receives existing initialization and timing history");
+                    Check(reattached.Initialized && reattached.TriggerIntervals.Length > 0 && reattached.SimHubIntervals.Length > 0, "Restarted HMI receives initialization and both timing histories");
                     int[] reattachedServos = counts(servoReads); Thread.Sleep(1800);
                     for (int axis = 4; axis <= 7; axis++) Check(Volatile.Read(ref servoReads[axis - 1]) - reattachedServos[axis - 1] >= 3, "Hub monitoring remains active after HMI reconnect, axis " + axis);
                     Equal(detachedTargets, Volatile.Read(ref targetWrites), "Reconnecting HMI does not change movement targets");
@@ -537,7 +573,7 @@ namespace SimHub2SimRig.Tests
             {
                 foreach (double[] history in new[] { new double[0], Enumerable.Repeat(10.0, 25).ToArray(), Enumerable.Repeat(25.0, 6000).ToArray(), new[] { 10.0, 200.0, 10.0 } })
                 {
-                    chart.SetSamples(history);
+                    chart.SetSamples(history, history);
                     var area = chart.ChartAreas[0];
                     Near(-60, area.AxisX.Minimum, "Sender x minimum stays fixed as history changes");
                     Near(0, area.AxisX.Maximum, "Sender x maximum stays at now");
@@ -551,12 +587,20 @@ namespace SimHub2SimRig.Tests
                         Check(chart.Series[0].Points.All(p => p.XValue >= -60 && p.XValue <= 0), "Sender history stays inside fixed time window");
                     }
                 }
+                Check(chart.Series["SimHub"].Color != chart.Series["ModBus"].Color, "Timing sources have different colors");
+                chart.SetSamples(new[] { 10.0, 20.0 }, new[] { 40.0, 50.0, 60.0 });
+                Equal(2, chart.Series["ModBus"].Points.Count, "ModBus has its own history");
+                Equal(3, chart.Series["SimHub"].Points.Count, "SimHub has its own history");
+                Near(0, chart.Series["SimHub"].Points.Last().XValue, "Latest SimHub point is anchored at now");
+                chart.SetSamples(null, null);
+                Check(chart.Series.All(s => s.Points.Count == 0), "Missing histories clear both traces");
             }
             string destination = Path.Combine(root, "CSharp", "Tests", "screenshots"); Directory.CreateDirectory(destination);
             var context = new SimHub2SimRig.HMI.UiContext(testRoot, "SimHub2SimRig.UiRender." + Guid.NewGuid().ToString("N"));
             var status = new Engine(config, true).Snapshot();
             status.Initialized = true; status.Simulated = true; status.Playback = "stopped"; status.Mode = "simhub";
             status.TriggerIntervals = Enumerable.Range(0, 400).Select(i => 10.0 + 2 * Math.Sin(i * .1)).ToArray();
+            status.SimHubIntervals = Enumerable.Range(0, 400).Select(i => 16.0 + 3 * Math.Cos(i * .1)).ToArray();
             foreach (AxisStatus a in status.Axes) { a.Homed = true; a.Servo = 1; a.Error = 5; a.Load = 20 + a.Axis; a.Target = a.Axis * 10 - 40; }
             context.Status = status;
             Action<System.Windows.Forms.Form, string> capture = (form, name) => {
@@ -583,7 +627,7 @@ namespace SimHub2SimRig.Tests
                             Check(active.Font.Size >= 24 && active.Width >= 200 && active.Height >= 96, "INIT/START is a large prominent button");
                             Equal(!context.Status.Busy, active.Enabled, "INIT/START enabled only while waiting for a request");
                             Check(mainButtons.Where(b => b != active).All(b => !b.Enabled), "Every other button disabled before INIT completes");
-                            Check(Descendants(form).OfType<System.Windows.Forms.RadioButton>().All(r => !r.Enabled), "Motion modes disabled before INIT completes");
+                            Check(Descendants(form).OfType<System.Windows.Forms.RadioButton>().Where(r => r.Tag != null).All(r => !r.Enabled), "Motion modes disabled before INIT completes");
                         }
                         Action<string, string> below = (upperKey, lowerKey) => {
                             var upper = mainButtons.Single(b => b.Text == context.T("Panels", upperKey));
@@ -600,6 +644,16 @@ namespace SimHub2SimRig.Tests
                         var senderChart = Descendants(form).OfType<SimHub2SimRig.HMI.SenderIntervalChart>().Single();
                         Near(100, senderChart.ChartAreas[0].AxisY.Maximum, "Rendered sender y maximum");
                         Equal("", senderChart.ChartAreas[0].AxisX.Title, "Rendered sender has no x title");
+                        var sources = Descendants(form).OfType<System.Windows.Forms.RadioButton>().Where(r => r.Name.StartsWith("chart")).ToArray();
+                        Equal(3, sources.Length, "Three timing source choices");
+                        foreach (var source in sources)
+                        {
+                            Check(source.Enabled, "Chart selection remains available: " + source.Text);
+                            source.Checked = true;
+                            Equal(source.Text != "ModBus", senderChart.Series["SimHub"].Enabled, "SimHub visibility for " + source.Text);
+                            Equal(source.Text != "SimHub", senderChart.Series["ModBus"].Enabled, "ModBus visibility for " + source.Text);
+                        }
+                        sources.Single(r => r.Text == "Beide").Checked = true;
                     }
                     foreach (var button in Descendants(form).OfType<System.Windows.Forms.Button>())
                     {
@@ -797,6 +851,7 @@ namespace SimHub2SimRig.Tests
             Run("Three-bus queue barrier and failed-write trigger suppression", Barrier);
             Run("CSV compatibility, calibration, preview and playback conversion", CsvAndPersistence);
             Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
+            Run("SimHub receive intervals, disconnect reset and bounded history", SimHubReceiveTimings);
             Run("Actual Com EXE, single instance and awaited shutdown", ExecutableLifecycle);
             Run("Abrupt console-process exit finishes lowering", ConsoleProcessExit);
             Run("Native console WM_CLOSE finishes lowering", ConsoleWindowClose);
