@@ -9,6 +9,7 @@ namespace SimHub2SimRig.HMI
     public sealed class SenderIntervalChart : Chart
     {
         readonly double windowSeconds;
+        bool simHubSelected = true, simHubConnected;
 
         public SenderIntervalChart(double windowSeconds)
         {
@@ -36,13 +37,22 @@ namespace SimHub2SimRig.HMI
             area.AxisX.MajorGrid.LineColor = area.AxisY.MajorGrid.LineColor = Color.Gainsboro;
             ChartAreas.Add(area);
             Series.Add(new Series("ModBus") { ChartType = SeriesChartType.FastLine, Color = Color.SteelBlue });
-            Series.Add(new Series("SimHub") { ChartType = SeriesChartType.FastLine, Color = Color.DarkOrange });
+            Series.Add(new Series("SimHub") { ChartType = SeriesChartType.FastLine, Color = Color.DarkOrange, Enabled = false });
         }
 
         public void SetVisibleSources(bool simHub, bool modBus)
         {
-            Series["SimHub"].Enabled = simHub;
+            simHubSelected = simHub;
+            Series["SimHub"].Enabled = simHubSelected && simHubConnected;
             Series["ModBus"].Enabled = modBus;
+            Invalidate();
+        }
+
+        public void SetSimHubConnected(bool connected)
+        {
+            if (simHubConnected == connected) return;
+            simHubConnected = connected;
+            Series["SimHub"].Enabled = simHubSelected && simHubConnected;
             Invalidate();
         }
 

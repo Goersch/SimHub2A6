@@ -646,20 +646,16 @@ namespace SimHub2SimRig.Tests
                             Check(active.Font.Size >= 24 && active.Width >= 200 && active.Height >= 96, "INIT/START is a large prominent button");
                             Equal(!context.Status.Busy, active.Enabled, "INIT/START enabled only while waiting for a request");
                             Check(mainButtons.Where(b => b != active).All(b => !b.Enabled), "Every other button disabled before INIT completes");
-                            Check(Descendants(form).OfType<System.Windows.Forms.RadioButton>().Where(r => r.Tag != null).All(r => !r.Enabled), "Motion modes disabled before INIT completes");
+                            var modeMenu = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Text == "Mode");
+                            Check(modeMenu.DropDownItems.OfType<System.Windows.Forms.ToolStripMenuItem>().All(item => !item.Enabled), "Motion modes disabled before INIT completes");
                         }
-                        Action<string, string> below = (upperKey, lowerKey) => {
-                            var upper = mainButtons.Single(b => b.Text == context.T("Panels", upperKey));
-                            var lower = mainButtons.Single(b => b.Text == context.T("Panels", lowerKey));
-                            var upperRect = upper.RectangleToScreen(upper.ClientRectangle);
-                            var lowerRect = lower.RectangleToScreen(lower.ClientRectangle);
-                            Equal(upperRect.Left, lowerRect.Left, "Buttons share column: " + lowerKey);
-                            Check(lowerRect.Top >= upperRect.Bottom, "Button is below previous: " + lowerKey);
-                        };
-                        below("light_on", "light_off");
-                        below("maintenance", "analysis");
-                        below("leveling_start", "leveling_stop");
-                        below("leveling_stop", "save_load_values");
+                        var lightOn = mainButtons.Single(b => b.Text == context.T("Panels", "light_on"));
+                        var lightOff = mainButtons.Single(b => b.Text == context.T("Panels", "light_off"));
+                        Equal(lightOn.Top, lightOff.Top, "Light buttons share a row");
+                        Check(lightOff.Left >= lightOn.Right, "Light buttons do not overlap");
+                        var modeItems = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Text == "Mode").DropDownItems.OfType<System.Windows.Forms.ToolStripMenuItem>().ToArray();
+                        Equal(3, modeItems.Length, "Mode menu offers all three modes");
+                        Equal(context.Status.Mode, (string)modeItems.Single(item => item.Checked).Tag, "Mode menu marks the mode confirmed by Com");
                         var senderChart = Descendants(form).OfType<SimHub2SimRig.HMI.SenderIntervalChart>().Single();
                         Near(100, senderChart.ChartAreas[0].AxisY.Maximum, "Rendered sender y maximum");
                         Equal("", senderChart.ChartAreas[0].AxisX.Title, "Rendered sender has no x title");
@@ -669,7 +665,7 @@ namespace SimHub2SimRig.Tests
                         {
                             Check(source.Enabled, "Chart selection remains available: " + source.Text);
                             source.Checked = true;
-                            Equal(source.Text != "ModBus", senderChart.Series["SimHub"].Enabled, "SimHub visibility for " + source.Text);
+                            Equal(context.Status.Connected && source.Text != "ModBus", senderChart.Series["SimHub"].Enabled, "SimHub visibility for " + source.Text);
                             Equal(source.Text != "SimHub", senderChart.Series["ModBus"].Enabled, "ModBus visibility for " + source.Text);
                         }
                         sources.Single(r => r.Text == "Beide").Checked = true;

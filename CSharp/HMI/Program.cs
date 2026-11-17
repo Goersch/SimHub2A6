@@ -65,11 +65,12 @@ namespace SimHub2SimRig.HMI
         readonly Timer refresh = new Timer();
         readonly Timer clockRefresh = new Timer();
         readonly Label clock = new Label();
-        readonly Button initialize, startCom, leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff;
-        readonly RadioButton[] modes = new RadioButton[3];
+        readonly Button initialize, startCom, lightOn, lightOff;
+        readonly ToolStripMenuItem leveling, levelingStop, loads, maintenance, analysis;
+        readonly ToolStripMenuItem[] modes = new ToolStripMenuItem[3];
         MaintenanceForm maintenanceForm;
         AnalysisForm analysisForm;
-        bool polling, updating, closing, captureRequested, comUnavailable, startingCom;
+        bool polling, closing, captureRequested, comUnavailable, startingCom;
         int chartTick;
         public MainForm(UiContext context)
         {
@@ -80,7 +81,7 @@ namespace SimHub2SimRig.HMI
             Location = new Point(screen.WorkingArea.Left + 25, screen.WorkingArea.Top + 25);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Padding = new Padding(16) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 132)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
             Controls.Add(layout);
             connection.Name = "statusHistory"; connection.Dock = DockStyle.Fill; connection.Font = Font;
             var statusPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6), BackColor = Color.WhiteSmoke };
@@ -128,7 +129,7 @@ namespace SimHub2SimRig.HMI
             startCom.Font = new Font(Font.FontFamily, 32, FontStyle.Bold);
             startCom.MinimumSize = initialize.MinimumSize;
             motorPanel.Controls.Add(startCom);
-            layout.Controls.Add(motorPanel, 1, 0);
+            layout.Controls.Add(motorPanel, 1, 1);
             bool fittingMotorTable = false;
             fitMotorTable = () => {
                 if (fittingMotorTable) return;
@@ -140,7 +141,7 @@ namespace SimHub2SimRig.HMI
                     // a little space below the final row for startup/DPI rounding.
                     int rowsHeight = motors.Rows.Cast<DataGridViewRow>().Where(row => row.Visible).Sum(row => row.Height);
                     int height = Math.Max(initialize.MinimumSize.Height, motors.ColumnHeadersHeight + rowsHeight + Math.Max(4, motors.Font.Height / 3)) + motorPanel.Margin.Vertical;
-                    if (layout.RowStyles[0].Height != height) layout.RowStyles[0].Height = height;
+                    if (layout.RowStyles[1].Height != height) layout.RowStyles[1].Height = height;
                 }
                 finally { fittingMotorTable = false; }
             };
@@ -151,49 +152,46 @@ namespace SimHub2SimRig.HMI
             motors.VisibleChanged += (s, e) => fitMotorTable();
             Shown += (s, e) => { motors.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells); fitMotorTable(); };
             fitMotorTable();
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke, ColumnCount = 4, RowCount = 3, Padding = new Padding(2) };
-            for (int i = 0; i < 4; i++) actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            for (int i = 0; i < 3; i++) actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-            leveling = UiContext.Button(ui.T("Panels", "leveling_start"), async () => await Send("leveling.start"));
-            levelingStop = UiContext.Button(ui.T("Panels", "leveling_stop"), async () => await Send("leveling.stop"));
-            loads = UiContext.Button(ui.T("Panels", "save_load_values"), async () => {
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke, ColumnCount = 2, RowCount = 1, Padding = new Padding(2) };
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            leveling = MenuAction("Start", async () => await Send("leveling.start"));
+            levelingStop = MenuAction("Stop", async () => await Send("leveling.stop"));
+            loads = MenuAction("Save", async () => {
                 if (MessageBox.Show(this, ui.T("MainDialog", "save_load_confirmation"), ui.T("Panels", "save_load_values"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) == DialogResult.OK) captureRequested = await Send("loads.save");
             });
-            analysis = UiContext.Button(ui.T("Panels", "analysis"), async () => {
+            analysis = MenuAction("Analizis", async () => {
                 if (analysisForm != null && !analysisForm.IsDisposed) { analysisForm.Activate(); return; }
                 if (await Send("analysis.open")) { analysisForm = new AnalysisForm(ui); analysisForm.Show(this); }
             });
-            maintenance = UiContext.Button(ui.T("Panels", "maintenance"), async () => {
+            maintenance = MenuAction("Maintenance", async () => {
                 if (maintenanceForm != null && !maintenanceForm.IsDisposed) { maintenanceForm.Activate(); return; }
                 if (await Send("maintenance.open")) { maintenanceForm = new MaintenanceForm(ui); maintenanceForm.Show(this); }
             });
             lightOn = UiContext.Button(ui.T("Panels", "light_on"), async () => await Light(true));
             lightOff = UiContext.Button(ui.T("Panels", "light_off"), async () => await Light(false));
-            foreach (Button button in new[] { leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff }) button.Dock = DockStyle.Fill;
-            actions.Controls.Add(leveling, 0, 0);
-            actions.Controls.Add(levelingStop, 0, 1);
-            actions.Controls.Add(loads, 0, 2);
-            actions.Controls.Add(lightOn, 1, 0);
-            actions.Controls.Add(lightOff, 1, 1);
-            actions.Controls.Add(maintenance, 2, 0);
-            actions.Controls.Add(analysis, 2, 1);
-            var modePanel = new GroupBox { Text = ui.T("Panels", "mode"), Dock = DockStyle.Fill };
-            var modeFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            foreach (Button button in new[] { lightOn, lightOff }) button.Dock = DockStyle.Fill;
+            actions.Controls.Add(lightOn, 0, 0);
+            actions.Controls.Add(lightOff, 1, 0);
+            var modeMenu = new ToolStripMenuItem("Mode");
             string[] keys = { "mode_active", "mode_actual_positions", "mode_inactive" }, values = { "simhub", "actual_positions", "center" };
             for (int i = 0; i < 3; i++)
             {
-                string value = values[i]; var radio = modes[i] = new RadioButton { Text = ui.T("Panels", keys[i]), AutoSize = true, Tag = value };
-                radio.CheckedChanged += async (s, e) => { if (!updating && radio.Checked) await ui.Command(this, new Request { Operation = "mode", Mode = value }); };
-                modeFlow.Controls.Add(radio);
+                string value = values[i];
+                var item = modes[i] = new ToolStripMenuItem(ui.T("Panels", keys[i]).Replace("&", "&&")) { Tag = value };
+                item.Click += async (s, e) => {
+                    if (!item.Checked && await ui.Command(this, new Request { Operation = "mode", Mode = value })) await Poll();
+                };
+                modeMenu.DropDownItems.Add(item);
             }
-            modePanel.Controls.Add(modeFlow); actions.Controls.Add(modePanel, 3, 0); actions.SetRowSpan(modePanel, 3);
-            layout.Controls.Add(actions, 1, 1);
+            layout.Controls.Add(actions, 1, 0);
             timings = new SenderIntervalChart(ui.Config.Ini.Number("ui", "trigger_chart_window_s"));
             var timingPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
             timingPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             timingPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             timingPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var timingSources = new FlowLayoutPanel { Name = "timingSources", Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+            var timingSources = new FlowLayoutPanel { Name = "timingSources", Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, BackColor = Color.White };
             timingSources.Controls.Add(new Label { Text = "Telegrammabstand:", AutoSize = true, Margin = new Padding(3, 5, 10, 0) });
             foreach (string source in new[] { "SimHub", "ModBus", "Beide" })
             {
@@ -205,10 +203,24 @@ namespace SimHub2SimRig.HMI
             timingPanel.Controls.Add(timingSources, 0, 0);
             timingPanel.Controls.Add(timings, 0, 1);
             layout.Controls.Add(timingPanel, 1, 2);
+            var menu = new MenuStrip { Name = "mainMenu", Font = Font };
+            var fileMenu = new ToolStripMenuItem("File");
+            fileMenu.DropDownItems.Add(new ToolStripMenuItem("Exit", null, (s, e) => Close()));
+            var levelingMenu = new ToolStripMenuItem("Leveling");
+            levelingMenu.DropDownItems.AddRange(new ToolStripItem[] { leveling, levelingStop, loads });
+            var toolsMenu = new ToolStripMenuItem("Tools");
+            toolsMenu.DropDownItems.AddRange(new ToolStripItem[] { maintenance, analysis });
+            menu.Items.AddRange(new ToolStripItem[] { fileMenu, levelingMenu, modeMenu, toolsMenu });
+            MainMenuStrip = menu;
+            Controls.Add(menu);
             UpdateInitializationControls(false, false);
             refresh.Interval = Math.Max(50, ui.Config.Ini.Int("ui", "refresh_ms")); refresh.Tick += async (s, e) => await Poll(); refresh.Start();
             Shown += async (s, e) => await Poll();
             FormClosing += OnClosing;
+        }
+        static ToolStripMenuItem MenuAction(string text, Action action)
+        {
+            return new ToolStripMenuItem(text, null, (s, e) => action());
         }
         Task<bool> Send(string command) { return ui.Command(this, new Request { Operation = command }); }
         async Task StartComAndInitialize()
@@ -281,8 +293,9 @@ namespace SimHub2SimRig.HMI
             foreach (Form dialog in OwnedForms) if (dialog != statusHistoryForm) dialog.Enabled = initialized;
             if (!initialized)
             {
-                foreach (Button button in new[] { leveling, levelingStop, loads, maintenance, analysis, lightOn, lightOff }) button.Enabled = false;
-                foreach (RadioButton radio in modes) radio.Enabled = false;
+                foreach (ToolStripMenuItem item in new[] { leveling, levelingStop, loads, maintenance, analysis }) item.Enabled = false;
+                lightOn.Enabled = lightOff.Enabled = false;
+                foreach (ToolStripMenuItem item in modes) item.Enabled = false;
             }
         }
         async Task Light(bool enabled)
@@ -313,6 +326,7 @@ namespace SimHub2SimRig.HMI
                 if (message != lastConnection) { AddStatus(message, true); lastConnection = message; }
                 connection.ForeColor = Color.Firebrick;
                 comUnavailable = true;
+                timings.SetSimHubConnected(false);
                 UpdateInitializationControls(false, false);
             }
             finally { polling = false; }
@@ -321,6 +335,7 @@ namespace SimHub2SimRig.HMI
         {
                 comUnavailable = false;
                 ui.Status = status;
+                timings.SetSimHubConnected(status.Connected);
                 rig.RawMin = status.SimHubPositionMin; rig.RawMax = status.SimHubPositionMax;
                 string summary = "SimHub2SimRigCom  |  " + (status.Simulated ? "SIMULATION  |  " : "") + "SimHub: " + (status.Connected ? "Connected" : "Disconnected") + (status.Recording ? "  /  Recording" : status.GameRunning ? "  /  Recording paused (unchanged data)" : "");
                 if (summary != lastConnection) { AddStatus(summary, true); lastConnection = summary; }
@@ -342,9 +357,7 @@ namespace SimHub2SimRig.HMI
                 loads.Enabled = ready && !status.GameRunning && !status.Maintenance && !status.Analysis;
                 maintenance.Enabled = status.Maintenance || (ready && !status.Connected && !status.Analysis);
                 analysis.Enabled = status.Analysis || (ready && !status.Connected && !status.Maintenance);
-                updating = true;
-                foreach (RadioButton radio in modes) { radio.Checked = (string)radio.Tag == status.Mode; radio.Enabled = ready && !status.Maintenance && !status.Analysis; }
-                updating = false;
+                foreach (ToolStripMenuItem item in modes) { item.Checked = (string)item.Tag == status.Mode; item.Enabled = ready && !status.Maintenance && !status.Analysis; }
                 foreach (AxisStatus axis in status.Axes)
                 {
                     var row = motors.Rows[axis.Axis - 1];
