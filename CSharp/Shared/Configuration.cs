@@ -33,6 +33,7 @@ namespace SimHub2SimRig.Shared
             }
         }
         public IEnumerable<string> Sections { get { return data.Keys; } }
+        public IEnumerable<string> Keys(string section) { return data[section].Keys; }
         public bool Has(string section) { return data.ContainsKey(section); }
         public bool Has(string section, string key) { return data.ContainsKey(section) && data[section].ContainsKey(key); }
         public string Get(string section, string key) { return data[section][key].Replace("\\n", "\n"); }

@@ -8,7 +8,7 @@ namespace SimHub2SimRig.HMI
 {
     public static class ComStartup
     {
-        public static async Task Run(Func<Task<Status>> query, Action launch, Func<Task> initialize, Func<bool> canceled)
+        public static async Task Run(Func<Task<Status>> query, Action launch, Func<Task> initialize, Func<bool> canceled, string timeoutMessage = null)
         {
             Status status = null;
             if (canceled()) throw new OperationCanceledException();
@@ -25,7 +25,7 @@ namespace SimHub2SimRig.HMI
                     catch (Exception e) { if (!ConnectionError(e)) throw; }
                     if (status == null)
                     {
-                        if (watch.Elapsed.TotalSeconds >= 30) throw new TimeoutException("Com wurde gestartet, ist aber noch nicht erreichbar. Bitte die Com-Konsole prüfen.");
+                        if (watch.Elapsed.TotalSeconds >= 30) throw new TimeoutException(timeoutMessage ?? LanguageText.LoadDefault().Get("Errors", "com_start_timeout"));
                         await Task.Delay(200);
                     }
                 }

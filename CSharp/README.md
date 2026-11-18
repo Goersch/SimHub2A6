@@ -144,6 +144,27 @@ weiter gefüllt. Zeitfenster, Aktualisierungstakt und feste Millisekundenachse
 bleiben für beide Kurven gleich. Jede Kurve verankert ihren neuesten Messwert
 bei null, entsprechend der bisherigen Darstellung des Senderdiagramms.
 
+Unter **Mode** wählen zwei separate Menüeinträge unterhalb einer Trennlinie den
+Sendertakt, unabhängig von **Active** bis **Inactive**:
+
+- **Oversampling** (Voreinstellung): Der Sender arbeitet wie bisher unabhängig
+  im über `sender_cycle_s` eingestellten Takt und übernimmt die neuesten Daten.
+- **SimHub Cycle**: Jedes übernommene gültige `POSITIONS`-Telegramm weckt den
+  ModBus-Thread unmittelbar. Dieser übernimmt den neuesten vollständigen
+  Datensatz und sendet erforderliche Positionsänderungen samt Trigger an die
+  Achsen. Identische Positionswerte durchlaufen ebenfalls einen gemessenen
+  Zyklus; die bestehende Änderungsschwelle verhindert unnötige Schreibzugriffe.
+  Mehrere noch ausstehende Datensätze werden zum neuesten zusammengefasst.
+
+Hub-Fehlerüberwachung, Bewegungssperren, Telemetrie, Aufzeichnung und Playback
+bleiben in beiden Varianten aktiv. Ohne neue Positionsdaten entstehen im
+SimHub-Cycle-Modus keine zusätzlichen ModBus-Zyklusmesswerte; die
+SimHub-Empfangsmessung läuft unverändert weiter. Ein Moduswechsel oder eine
+Betriebssperre beginnt die nächste ModBus-Abstandsfolge neu, die vorhandene
+Historie bleibt erhalten. Die Auswahl ist nach INIT verfügbar und während
+Wartung, Analyse oder laufenden Operationen gesperrt. Com hält sie auch bei
+geschlossenem HMI; nach einem Com-Neustart gilt wieder Oversampling.
+
 Die Statusausgabe steht am unteren Rand des HMI über die gesamte Fensterbreite
 und zeigt die letzten drei Meldungen als Tabelle mit den Spalten **Datum**,
 **Uhrzeit**, **PROZESS** und **Message**. In der Prozessspalte stehen `COM` oder
@@ -235,7 +256,14 @@ Die bestehenden Formate werden weiterverwendet:
 
 - `INI/SimHub2SimRigCom.ini`: Ports, Achsenparameter, Geometrie, Bewegung, Aufzeichnung, Leveling, Schmierung und Telemetrie. `axis_status_refresh_ms` steht unter `[control]`.
 - `INI/SimHub2SimRigHMI.ini`: Anzeigeaktualisierung, Diagramme, Farben und optionale Raumlicht-Einstellungen. Positionierungsbereiche und Schmierungswarnschwellen liefert Com per IPC; HMI benötigt keine Com-INI.
-- `INI/Language.ini`: vorhandene Dialogtexte.
+- `INI/Language.ini`: HMI-Texte einschließlich Menüs, Radiogruppen, Dialogbuttons,
+  Tabellen, Diagrammen, Anzeigeformaten und dynamischen Statusmeldungen. Nach
+  Änderungen das HMI neu starten. Benannte Platzhalter wie `{error}` oder
+  `{value:.2f}` beibehalten. Die Abschnitte `MessagePatterns` und `MessageTexts`
+  ordnen bekannte Com-Meldungen konfigurierbaren Anzeigetexten zu; rohe Logdaten,
+  Protokollwerte, Dateinamen und unbekannte Geräte-/Betriebssystemdetails bleiben
+  erhalten. Der Projektagent `hmi-language` prüft gemäß `AGENTS.md` jede weitere
+  HMI-Änderung. Der Build führt zusätzlich den statischen Sprachcheck aus.
 - `INI/leveling_offsets.json`, `INI/grease_data.json`, `INI/simrig_load_values.json`: bestehender persistenter Zustand; Schreiben erfolgt über eine temporäre Datei mit atomarem Austausch.
 - `SimHubData/*.csv`: bisherige und neue Aufzeichnungsformate; neue Dateien enthalten dieselben 58 Spalten einschließlich Istpositions-Zeitstempel, Alter und Bodenlasten.
 - `INI/room_light.ini`: private Lichtkonfiguration; alternativ `[room_light]` in der HMI-INI. Der Platzhalter `{status}` wird durch `0` oder `1` ersetzt. Nur das HMI ruft die URL auf.

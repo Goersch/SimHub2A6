@@ -65,11 +65,11 @@ namespace SimHub2SimRig.HMI
                 homed[g].Text = ui.T("Maintenance", referenced ? "homing_done" : "not_homed"); homed[g].ForeColor = referenced ? Color.ForestGreen : Color.Firebrick;
                 start[g].Enabled = ready && referenced; stop[g].Enabled = (s.Greasing || s.Activity == "Greasing") && first == s.GreaseFirst; reset[g].Enabled = ready;
                 GreaseEntry entry = s.Grease[g == 3 ? "4-7" : first.ToString()]; DateTime date;
-                last[g].Text = ui.T("Panels", "grease_last") + ": " + (DateTime.TryParse(entry.lastGreaseAt, out date) ? date.ToString("dd.MM.yyyy HH:mm") : "—");
-                var elapsed = TimeSpan.FromMinutes(Math.Max(0, entry.playtimeMinutes)); runtime[g].Text = ui.T("Panels", "grease_playtime") + ": " + ((int)elapsed.TotalHours).ToString("00") + ":" + elapsed.Minutes.ToString("00");
+                last[g].Text = ui.F("Maintenance", "last_grease_label", "label", ui.T("Panels", "grease_last"), "value", DateTime.TryParse(entry.lastGreaseAt, out date) ? date.ToString(ui.T("Formats", "last_grease_datetime")) : ui.T("Common", "placeholder"));
+                var elapsed = TimeSpan.FromMinutes(Math.Max(0, entry.playtimeMinutes)); runtime[g].Text = ui.F("Maintenance", "playtime_label", "label", ui.T("Panels", "grease_playtime"), "hours", (int)elapsed.TotalHours, "minutes", elapsed.Minutes);
                 runtime[g].BackColor = elapsed.TotalHours >= s.GreaseAlarmHours ? Color.LightCoral : elapsed.TotalHours >= s.GreaseWarningHours ? Color.Khaki : Color.Transparent;
             }
-            status.Text = s.Connected ? ui.T("Maintenance", "simhub_locked") : s.Activity + "  " + s.LastError;
+            status.Text = s.Connected ? ui.T("Maintenance", "simhub_locked") : ui.F("Maintenance", "activity_status", "activity", ui.Message(s.Activity), "error", ui.Message(s.LastError));
         }
     }
 }

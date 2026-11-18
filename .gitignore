@@ -15,7 +15,10 @@ venv/
 !.vscode/launch.json
 .idea/
 .agents/
-.codex/
+.codex/*
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/hmi-language.toml
 
 # Runtime output and machine-specific state
 LOG/

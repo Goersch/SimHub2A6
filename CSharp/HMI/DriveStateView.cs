@@ -35,8 +35,8 @@ namespace SimHub2SimRig.HMI
 
         public static string Text(UiContext ui, AxisStatus axis, Status status)
         {
-            if (!axis.Enabled) return "Disabled";
-            if (IsFault(axis)) return "Drive fault (ServoStatus 3)";
+            if (!axis.Enabled) return ui.T("MainDialog", "axis_disabled");
+            if (IsFault(axis)) return ui.T("MainDialog", "drive_fault");
             if (status.Leveling && axis.Axis >= 4 && axis.Axis <= 7)
                 return ui.T("MainDialog", "state_leveling");
             if (axis.Error == 0 && status.Greasing && axis.Axis >= status.GreaseFirst && axis.Axis <= status.GreaseLast)

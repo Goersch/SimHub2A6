@@ -32,21 +32,21 @@ namespace SimHub2SimRig.HMI
             selectors.Controls.Add(UiContext.Button(ui.T("Analysis", "select_hub_axes"), () => { for (int i = 0; i < 7; i++) axes[i].Checked = i >= 3; }));
             for (int i = 0; i < 7; i++) { axes[i] = new CheckBox { Text = ui.T("Analysis", "axis_" + (i + 1)), Checked = true, AutoSize = true, ForeColor = colors[i] }; axes[i].CheckedChanged += (s, e) => Draw(); selectors.Controls.Add(axes[i]); }
             layout.Controls.Add(selectors, 1, 0);
-            chart = UiContext.Chart(ui.T("Analysis", "time_axis") + " [s]", "mm"); layout.Controls.Add(chart, 1, 1);
+            chart = UiContext.Chart(ui.T("Analysis", "time_axis_seconds"), ui.T("Common", "unit_mm"), ui); layout.Controls.Add(chart, 1, 1);
             var signalFlow = new FlowLayoutPanel { Dock = DockStyle.Fill };
             string[] keys = { "signal_target", "signal_calculated_actual", "signal_actual", "signal_ground_deviation" };
             for (int i = 0; i < 4; i++) { signals[i] = new CheckBox { Text = ui.T("Analysis", keys[i]), Checked = i == 0, AutoSize = true }; signals[i].CheckedChanged += (s, e) => Draw(); signalFlow.Controls.Add(signals[i]); }
             layout.Controls.Add(signalFlow, 1, 2);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
-            play = UiContext.Button("▶", async () => {
+            play = UiContext.Button(ui.T("Analysis", "play"), async () => {
                 if (files.SelectedItem == null) return;
                 await ui.Command(this, new Request { Operation = "playback.play", FileName = (string)files.SelectedItem, Axes = Enumerable.Range(1, 7).Where(a => axes[a - 1].Checked).ToArray() });
             });
-            pause = UiContext.Button("Ⅱ", async () => await ui.Command(this, new Request { Operation = "playback.pause" }));
-            stop = UiContext.Button("■", async () => await ui.Command(this, new Request { Operation = "playback.stop" }));
+            pause = UiContext.Button(ui.T("Analysis", "pause"), async () => await ui.Command(this, new Request { Operation = "playback.pause" }));
+            stop = UiContext.Button(ui.T("Analysis", "stop"), async () => await ui.Command(this, new Request { Operation = "playback.stop" }));
             buttons.Controls.AddRange(new Control[] { play, pause, stop });
             int[] deltas = { -60, -10, 10, 60 };
-            for (int i = 0; i < 4; i++) { int delta = deltas[i]; seek[i] = UiContext.Button((delta > 0 ? "+" : "") + delta + " s", async () => await ui.Command(this, new Request { Operation = "playback.seek", Seconds = delta })); seek[i].MinimumSize = new Size(60, 32); buttons.Controls.Add(seek[i]); }
+            for (int i = 0; i < 4; i++) { int delta = deltas[i]; seek[i] = UiContext.Button(ui.F("Analysis", "seek", "seconds", delta), async () => await ui.Command(this, new Request { Operation = "playback.seek", Seconds = delta })); seek[i].MinimumSize = new Size(60, 32); buttons.Controls.Add(seek[i]); }
             layout.Controls.Add(buttons, 1, 3); status.AutoSize = true; layout.Controls.Add(status, 1, 4);
             Shown += async (s, e) => {
                 try
@@ -54,7 +54,7 @@ namespace SimHub2SimRig.HMI
                     Reply reply = await ui.Call(new Request { Operation = "files" }); if (IsDisposed) return; files.Items.AddRange(reply.Files);
                     if (files.Items.Count > 0) { int active = ui.Status == null ? -1 : files.Items.IndexOf(ui.Status.PlaybackFile ?? ""); files.SelectedIndex = active < 0 ? 0 : active; }
                 }
-                catch (Exception failure) { if (!IsDisposed) status.Text = failure.Message; }
+                catch (Exception failure) { if (!IsDisposed) status.Text = ui.F("Errors", "files_failed", "error", ui.Message(failure.Message)); }
             };
             FormClosing += async (s, e) => {
                 if (force || e.CloseReason == CloseReason.FormOwnerClosing) return; e.Cancel = true; if (closing) return; closing = true;
@@ -71,9 +71,9 @@ namespace SimHub2SimRig.HMI
             try
             {
                 Reply reply = await ui.Call(new Request { Operation = "preview", FileName = file });
-                if (IsDisposed || current != generation) return; SetPreview(reply.Samples); status.Text = file + "  |  " + samples.Length + " points";
+                if (IsDisposed || current != generation) return; SetPreview(reply.Samples); status.Text = ui.F("Analysis", "preview_status", "file", file, "points", samples.Length);
             }
-            catch (Exception e) { if (!IsDisposed) status.Text = e.Message; }
+            catch (Exception e) { if (!IsDisposed) status.Text = ui.F("Errors", "preview_failed", "error", ui.Message(e.Message)); }
         }
         public void SetPreview(Sample[] values) { samples = values ?? new Sample[0]; Draw(); }
         void Draw()
@@ -84,7 +84,7 @@ namespace SimHub2SimRig.HMI
             for (int a = 0; a < 7; a++) if (axes[a].Checked)
                 for (int signal = 0; signal < 4; signal++) if (signals[signal].Checked && (signal != 3 || a >= 3))
                 {
-                    var series = new Series(axes[a].Text + " / " + signals[signal].Text) { ChartType = SeriesChartType.FastLine, Color = colors[a], BorderWidth = signal == 2 ? 2 : 1, BorderDashStyle = styles[signal] };
+                    var series = new Series("axis" + a + "signal" + signal) { LegendText = ui.F("Analysis", "series_name", "axis", axes[a].Text, "signal", signals[signal].Text), ChartType = SeriesChartType.FastLine, Color = colors[a], BorderWidth = signal == 2 ? 2 : 1, BorderDashStyle = styles[signal] };
                     foreach (Sample sample in samples) series.Points.AddXY(sample.Seconds, (signal == 0 ? sample.Target : signal == 1 ? sample.Calculated : signal == 2 ? sample.Actual : sample.Ground)[a]);
                     chart.Series.Add(series);
                 }
@@ -97,7 +97,7 @@ namespace SimHub2SimRig.HMI
             foreach (Button button in seek) button.Enabled = valid && s.Playback != "playing";
             files.Enabled = s.Playback == "stopped";
             foreach (CheckBox axis in axes) axis.Enabled = s.Playback == "stopped";
-            if (!string.IsNullOrEmpty(s.PlaybackFile)) status.Text = s.PlaybackFile + "  |  " + s.Playback + "  |  " + s.PlaybackSeconds.ToString("F2") + " s";
+            if (!string.IsNullOrEmpty(s.PlaybackFile)) status.Text = ui.F("Analysis", "playback_status", "file", s.PlaybackFile, "state", ui.T("Analysis", "playback_" + s.Playback), "seconds", s.PlaybackSeconds);
             var area = chart.ChartAreas[0]; area.AxisX.StripLines.Clear();
             if (samples.Length > 0 && s.PlaybackFile == (string)files.SelectedItem) area.AxisX.StripLines.Add(new StripLine { IntervalOffset = s.PlaybackSeconds, StripWidth = .015, BackColor = Color.Red });
         }

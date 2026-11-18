@@ -2,16 +2,19 @@ using System;
 using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
+using SimHub2SimRig.Shared;
 
 namespace SimHub2SimRig.HMI
 {
     public sealed class LogTable : DataGridView
     {
         readonly bool compact;
+        readonly Ini language;
         int messageWidth;
 
-        public LogTable(bool compact)
+        public LogTable(bool compact, UiContext ui = null)
         {
+            language = ui == null ? LanguageText.LoadDefault() : ui.Language;
             this.compact = compact;
             Dock = DockStyle.Fill; ReadOnly = true;
             AllowUserToAddRows = AllowUserToDeleteRows = AllowUserToResizeRows = false;
@@ -26,8 +29,8 @@ namespace SimHub2SimRig.HMI
             DefaultCellStyle.WrapMode = DataGridViewTriState.False;
             DefaultCellStyle.Padding = new Padding(8, 0, 8, 0);
             ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 0, 8, 0);
-            Columns.Add("date", "Datum"); Columns.Add("time", "Uhrzeit");
-            Columns.Add("process", "PROZESS"); Columns.Add("message", "Message");
+            Columns.Add("date", T("History", "date")); Columns.Add("time", T("History", "time"));
+            Columns.Add("process", T("History", "process")); Columns.Add("message", T("History", "message"));
             Columns[0].Width = 105; Columns[1].Width = 115; Columns[2].Width = 95;
             Columns[0].Frozen = Columns[1].Frozen = Columns[2].Frozen = true;
             foreach (DataGridViewColumn column in Columns) column.SortMode = DataGridViewColumnSortMode.NotSortable;
@@ -36,6 +39,7 @@ namespace SimHub2SimRig.HMI
             Font = new Font("Segoe UI", 9);
             SetRowSizes(); SizeChanged += (s, e) => FitMessageColumn();
         }
+        string T(string section, string key) { return language.Get(section, key); }
 
         protected override void OnFontChanged(EventArgs e)
         {
@@ -64,10 +68,11 @@ namespace SimHub2SimRig.HMI
             if (text.Length >= 23 && DateTime.TryParseExact(text.Substring(0, 23), "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out stamp)) length = 23;
             else if (text.Length >= 19 && DateTime.TryParseExact(text.Substring(0, 19), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out stamp)) length = 19;
             else stamp = DateTime.MinValue;
-            if (length != 0) { date = stamp.ToString("dd.MM.yyyy"); time = stamp.ToString("HH:mm:ss.fff"); text = text.Substring(length).TrimStart(); }
+            if (length != 0) { date = stamp.ToString(T("Formats", "log_date")); time = stamp.ToString(T("Formats", "log_time")); text = text.Substring(length).TrimStart(); }
+            if (language.Has("History", "process_" + process)) process = T("History", "process_" + process);
             for (int i = 0; i < (compact ? 1 : original.Length); i++)
             {
-                string message = i == 0 ? text : original[i];
+                string message = LanguageText.TranslateMessage(language, i == 0 ? text : original[i]);
                 int row = Rows.Add(date, time, process, message);
                 Rows[row].Tag = compact ? output : original[i];
                 if (!compact) messageWidth = Math.Max(messageWidth, TextRenderer.MeasureText(message, Font).Width + 24);

@@ -11,8 +11,9 @@ namespace SimHub2SimRig.HMI
         readonly double windowSeconds;
         bool simHubSelected = true, simHubConnected;
 
-        public SenderIntervalChart(double windowSeconds)
+        public SenderIntervalChart(double windowSeconds, UiContext ui = null)
         {
+            var language = ui == null ? LanguageText.LoadDefault() : ui.Language;
             if (windowSeconds <= 0 || double.IsNaN(windowSeconds) || double.IsInfinity(windowSeconds))
                 throw new ArgumentOutOfRangeException("windowSeconds");
             this.windowSeconds = windowSeconds;
@@ -21,23 +22,23 @@ namespace SimHub2SimRig.HMI
             BackColor = Color.White;
             MinimumSize = new Size(200, 120);
             var area = new ChartArea("main");
-            area.AxisX.Title = "";
+            area.AxisX.Title = language.Get("Charts", "sender_time_axis");
             area.AxisX.Minimum = -windowSeconds;
             area.AxisX.Maximum = 0;
             area.AxisX.Interval = windowSeconds / 6;
             area.AxisX.IsMarginVisible = false;
             area.AxisX.Enabled = AxisEnabled.True;
-            area.AxisX.LabelStyle.Format = "0.##";
-            area.AxisY.Title = "ms";
+            area.AxisX.LabelStyle.Format = language.Get("Formats", "chart_decimal");
+            area.AxisY.Title = language.Get("Common", "unit_ms");
             area.AxisY.Minimum = 0;
             area.AxisY.Maximum = 100;
             area.AxisY.Interval = 20;
             area.AxisY.Enabled = AxisEnabled.True;
-            area.AxisY.LabelStyle.Format = "0";
+            area.AxisY.LabelStyle.Format = language.Get("Formats", "chart_integer");
             area.AxisX.MajorGrid.LineColor = area.AxisY.MajorGrid.LineColor = Color.Gainsboro;
             ChartAreas.Add(area);
-            Series.Add(new Series("ModBus") { ChartType = SeriesChartType.FastLine, Color = Color.SteelBlue });
-            Series.Add(new Series("SimHub") { ChartType = SeriesChartType.FastLine, Color = Color.DarkOrange, Enabled = false });
+            Series.Add(new Series("ModBus") { LegendText = language.Get("Panels", "chart_modbus"), ChartType = SeriesChartType.FastLine, Color = Color.SteelBlue });
+            Series.Add(new Series("SimHub") { LegendText = language.Get("Panels", "chart_simhub"), ChartType = SeriesChartType.FastLine, Color = Color.DarkOrange, Enabled = false });
         }
 
         public void SetVisibleSources(bool simHub, bool modBus)

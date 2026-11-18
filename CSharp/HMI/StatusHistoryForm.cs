@@ -7,11 +7,12 @@ namespace SimHub2SimRig.HMI
 {
     public sealed class StatusHistoryForm : Form
     {
-        readonly LogTable messages = new LogTable(false);
+        readonly LogTable messages;
 
-        public StatusHistoryForm(IEnumerable<string> history)
+        public StatusHistoryForm(IEnumerable<string> history, UiContext ui = null)
         {
-            Text = "Meldungen seit HMI-Start";
+            Text = (ui == null ? LanguageText.LoadDefault() : ui.Language).Get("History", "title");
+            messages = new LogTable(false, ui);
             Size = new Size(1100, 500); MinimumSize = new Size(650, 300);
             StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
             Padding = new Padding(8);

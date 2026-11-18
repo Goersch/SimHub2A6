@@ -30,6 +30,7 @@ namespace SimHub2SimRig.Com
         readonly object hmiGate = new object();
         readonly Dictionary<Guid, double> hmiSessions = new Dictionary<Guid, double>();
         readonly List<Task> loops = new List<Task>();
+        readonly AutoResetEvent senderWake = new AutoResetEvent(false);
         readonly AxisStatus[] telemetry = Enumerable.Range(1, 7).Select(a => new AxisStatus { Axis = a }).ToArray();
         readonly int[] latest = Enumerable.Repeat(65535, 7).ToArray();
         readonly List<IPEndPoint> shutdownReplies = new List<IPEndPoint>();
@@ -39,6 +40,8 @@ namespace SimHub2SimRig.Com
         volatile bool initialized, initializing, connected, game, maintenance, analysis, shutdown, armed = true, busy;
         volatile bool leveling, greasing;
         volatile string mode = "simhub", activity = "", error = "";
+        volatile string senderMode = "oversampling";
+        long latestVersion; // Protected by MotionGate, together with arming.
         int greaseFirst, greaseLast, hubIndex;
         double lastHubCheck;
         readonly bool simulated;
@@ -120,6 +123,11 @@ namespace SimHub2SimRig.Com
                     if (!initialized) throw new InvalidOperationException("A6 initialization not complete");
                     lock (MotionGate) { mode = request.Mode; Recorder.ReadActual(mode == "actual_positions"); }
                     if (mode == "center") StartJob("Center", Center); break;
+                case "sender.mode":
+                    if (request.SenderMode != "oversampling" && request.SenderMode != "simhub_cycle") throw new ArgumentException("Invalid sender mode");
+                    if (busy || Playback.State != "stopped" || maintenance || analysis || shutdown) throw new InvalidOperationException("Sender mode is locked");
+                    lock (MotionGate) senderMode = request.SenderMode;
+                    senderWake.Set(); break;
                 case "maintenance.open":
                     if (maintenance) break;
                     EnsureIdle(true); if (analysis) throw new InvalidOperationException("Analysis is open");
@@ -374,8 +382,16 @@ namespace SimHub2SimRig.Com
                         if (!valid) { Log.Write("Invalid POSITIONS packet"); break; }
                         if (!game) SetGame(true);
                         Recorder.ObserveSimHubPositions(values);
-                        lock (latestGate) Array.Copy(values, latest, 7);
-                        lock (MotionGate) if (!maintenance && !shutdown) armed = true; break;
+                        lock (MotionGate)
+                        {
+                            lock (latestGate) Array.Copy(values, latest, 7);
+                            latestVersion++;
+                            if (!maintenance && !shutdown) armed = true;
+                        }
+                        // Publish the complete sample and arm motion before waking
+                        // the sender. Several arrivals during bus I/O coalesce to
+                        // the newest sample instead of building a stale backlog.
+                        senderWake.Set(); break;
                     case "START": SetGame(true); break;
                     case "END": SetGame(false); break;
                     case "SHUTDOWN":
@@ -418,28 +434,54 @@ namespace SimHub2SimRig.Com
         void SenderLoop()
         {
             double next = Timing.Now, previous = 0, cycle = Config.Ini.Number("simhub", "sender_cycle_s");
+            long sentVersion = 0;
+            bool sendRequested = false;
+            string activeMode = senderMode;
+            var wakeHandles = new[] { Stop.WaitHandle, senderWake };
             using (var wait = new PrecisionWait(Stop))
             while (!Stop.IsSet)
             {
+                if (senderMode == "simhub_cycle")
+                {
+                    // Timeouts retain the sender's hub interlock checks. Only
+                    // an event can request a new SimHub motion cycle.
+                    int wake = WaitHandle.WaitAny(wakeHandles, TimeSpan.FromSeconds(cycle));
+                    if (wake == 0 || Stop.IsSet) break;
+                    sendRequested |= wake == 1;
+                }
                 if (!analysis && !maintenance && !shutdown && initialized && !busy)
                 {
                     try
                     {
-                        int[] values; lock (latestGate) values = (int[])latest.Clone();
                         lock (MotionGate)
                         {
-                            bool moved = false; for (int a = 1; a <= 7; a++) moved |= HandlePosition(a, values[a - 1]);
-                            double now = Timing.Now;
-                            if (previous != 0) lock (stateGate) { intervals.Enqueue((now - previous) * 1000); while (intervals.Count > 6000) intervals.Dequeue(); }
-                            previous = now;
-                            if (moved) { Motion.Trigger(); Recorder.Trigger(); }
+                            if (activeMode != senderMode) { activeMode = senderMode; previous = 0; next = Timing.Now; }
+                            if (senderMode == "oversampling" || (sendRequested && latestVersion != sentVersion))
+                            {
+                                int[] values; lock (latestGate) values = (int[])latest.Clone();
+                                sentVersion = latestVersion;
+                                sendRequested = false;
+                                bool moved = false; for (int a = 1; a <= 7; a++) moved |= HandlePosition(a, values[a - 1]);
+                                double now = Timing.Now;
+                                if (previous != 0) lock (stateGate) { intervals.Enqueue((now - previous) * 1000); while (intervals.Count > 6000) intervals.Dequeue(); }
+                                previous = now;
+                                if (moved) { Motion.Trigger(); Recorder.Trigger(); }
+                            }
+                            else
+                            {
+                                sendRequested = false;
+                                if (mode != "center") HubAccepts();
+                            }
                         }
                     }
                     catch (Exception e) { Report(e); Stop.Wait(100); }
                 }
                 else previous = 0;
-                next += cycle; double rest = next - Timing.Now;
-                if (rest > 0) wait.Wait(rest); else next = Timing.Now;
+                if (senderMode == "oversampling")
+                {
+                    next += cycle; double rest = next - Timing.Now;
+                    if (rest > 0) wait.Wait(rest); else next = Timing.Now;
+                }
             }
         }
         void RecorderLoop()
@@ -508,7 +550,7 @@ namespace SimHub2SimRig.Com
             int[] positions; lock (latestGate) positions = (int[])latest.Clone();
             double[] center, loads; lock (Recorder.Gate) { center = (double[])Recorder.Center.Clone(); loads = Recorder.CalibrationLoads == null ? null : (double[])Recorder.CalibrationLoads.Clone(); }
             string[] messages = Log.Recent();
-            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Recording = Recorder.IsRecording, SimHubPositionMin = Config.Ini.Int("simhub", "position_min"), SimHubPositionMax = Config.Ini.Int("simhub", "position_max"), RawPositionMax = Config.RawMax, GreaseWarningHours = Config.Ini.Number("grease", "warning_after_operating_hours"), GreaseAlarmHours = Config.Ini.Number("grease", "alarm_after_operating_hours"), Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, SimHubIntervals = receiveTiming, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
+            return new Status { ProcessId = System.Diagnostics.Process.GetCurrentProcess().Id, Simulated = simulated, Connected = connected, GameRunning = game, Recording = Recorder.IsRecording, SimHubPositionMin = Config.Ini.Int("simhub", "position_min"), SimHubPositionMax = Config.Ini.Int("simhub", "position_max"), RawPositionMax = Config.RawMax, GreaseWarningHours = Config.Ini.Number("grease", "warning_after_operating_hours"), GreaseAlarmHours = Config.Ini.Number("grease", "alarm_after_operating_hours"), Initialized = initialized, Maintenance = maintenance, Analysis = analysis, Busy = busy || shutdown, Activity = activity, LastError = error, Messages = messages, Mode = mode, SenderMode = senderMode, Leveling = leveling, FixedAxis = Leveler.FixedAxis, Greasing = greasing, GreaseFirst = greaseFirst, GreaseLast = greaseLast, Playback = Playback.State, PlaybackFile = Playback.FileName, PlaybackSeconds = Playback.Seconds, Axes = states, Grease = g, TriggerIntervals = timing, SimHubIntervals = receiveTiming, LatestPositions = positions, LoadCenter = center, CalibrationLoads = loads };
         }
         public void ArmPlayback() { armed = true; SetGame(false); }
         static readonly int[][] Groups = { new[] { 1, 1 }, new[] { 2, 2 }, new[] { 3, 3 }, new[] { 4, 7 } };
@@ -576,6 +618,7 @@ namespace SimHub2SimRig.Com
                 if (job != null && !job.Wait(TimeSpan.FromSeconds(Config.Ini.Number("control", "homing_wait_timeout_s") + 10))) throw new TimeoutException("Operation did not stop before shutdown");
                 if (udp != null) udp.Close();
                 if (!Task.WaitAll(loops.ToArray(), TimeSpan.FromSeconds(15))) throw new TimeoutException("Background workers did not stop");
+                senderWake.Dispose();
                 Recorder.SetRunning(false); Recorder.Dispose(); lock (greaseGate) SaveGrease();
                 lock (MotionGate)
                 {

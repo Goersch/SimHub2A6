@@ -329,7 +329,8 @@ namespace SimHub2SimRig.Tests
                 Equal(1, retained.SimHubIntervals.Length, "Snapshots own immutable copies of receive history");
             }
         }
-        static void Integration()
+        static void Integration() { Integration(false); }
+        static void Integration(bool simHubCycle)
         {
             // Shorten only test settling/measurement settings in the isolated INI.
             string iniPath = config.PathFor("INI/SimHub2SimRigCom.ini"); string text = File.ReadAllText(iniPath);
@@ -368,7 +369,7 @@ namespace SimHub2SimRig.Tests
                     int recordingsBeforeInit = Directory.GetFiles(c.PathFor("SimHubData"), "*.csv").Length;
                     Check(!waiting.Initialized && !waiting.Busy, "Com starts idle and awaits HMI INIT");
                     Thread.Sleep(150); lock (wires) Equal(0, wires.Count, "Starting Com does not open serial ports automatically");
-                    foreach (string command in new[] { "mode", "leveling.start", "loads.save", "maintenance.open", "analysis.open", "grease.reset", "playback.play" })
+                    foreach (string command in new[] { "mode", "sender.mode", "leveling.start", "loads.save", "maintenance.open", "analysis.open", "grease.reset", "playback.play" })
                         Check(!client.Send(new Request { Operation = command }).Ok, "Com rejects pre-INIT function " + command);
                     using (var earlyUdp = new UdpClient())
                     {
@@ -389,6 +390,7 @@ namespace SimHub2SimRig.Tests
                     Check(!engine.Snapshot().GameRunning && !engine.Snapshot().Connected, "Finishing INIT does not replay discarded SimHub telegrams");
                     Equal(recordingsBeforeInit, Directory.GetFiles(c.PathFor("SimHubData"), "*.csv").Length, "Pre-INIT telegrams do not start recordings");
                     Check(client.Send(new Request { Operation = "status" }).Status.Initialized, "IPC status");
+                    if (simHubCycle) Check(client.Send(new Request { Operation = "sender.mode", SenderMode = "simhub_cycle" }).Ok, "Select event-driven sender through IPC");
                     Check(!client.Send(new Request { Operation = "raw.write" }).Ok, "No raw register commands in HMI protocol");
                     Check(!client.Send(new Request { Operation = "move", FirstAxis = 1, LastAxis = 1, Position = 0 }).Ok, "Com enforces maintenance ownership");
                     Check(!client.Send(new Request { Operation = "mode", Mode = "invalid" }).Ok, "Mode validation");
@@ -449,6 +451,7 @@ namespace SimHub2SimRig.Tests
                     Check(File.Exists(c.PathFor("INI/leveling_offsets.json")), "Leveling persistence");
                     Check(client.Send(new Request { Operation = "loads.save" }).Ok, "Load capture request"); Until(() => !engine.Snapshot().Busy, "Load capture finishes");
                     Check(client.Send(new Request { Operation = "maintenance.open" }).Ok, "Maintenance open"); Until(() => !engine.Snapshot().Busy, "Maintenance ready");
+                    Check(!client.Send(new Request { Operation = "sender.mode", SenderMode = "oversampling" }).Ok, "Sender choice locked during maintenance");
                     engine.Dispatch("START;POSITIONS 1 1 1 1 1 1 1"); Check(!engine.Snapshot().GameRunning, "UDP blocked during maintenance");
                     Check(!client.Send(new Request { Operation = "analysis.open" }).Ok, "Exclusive analysis ownership");
                     Check(!client.Send(new Request { Operation = "move", FirstAxis = 1, LastAxis = 7, Position = 0 }).Ok, "Invalid group rejected");
@@ -467,6 +470,7 @@ namespace SimHub2SimRig.Tests
                     int before = wires.Values.Sum(w => w.Frames.Count(f => f[1] == 16 && f[2] == 0x11 && f[3] == 6));
                     Thread.Sleep(120); Equal(before, wires.Values.Sum(w => w.Frames.Count(f => f[1] == 16 && f[2] == 0x11 && f[3] == 6)), "No stale SimHub targets after maintenance");
                     Check(client.Send(new Request { Operation = "analysis.open" }).Ok, "Analysis opens");
+                    Check(!client.Send(new Request { Operation = "sender.mode", SenderMode = "oversampling" }).Ok, "Sender choice locked during analysis");
                     string path = c.PathFor("SimHubData/playback.csv");
                     File.WriteAllText(path, "Timestamp;" + string.Join(";", Enumerable.Range(1, 7).Select(a => "TargetPosition" + a)) + "\n2026-11-02 12:00:00.000;0;0;30;0;0;0;0\n2026-11-02 12:00:02.000;0;0;50;0;0;0;0\n2026-11-02 12:00:03.000;0;0;60;0;0;0;0\n");
                     Check(!client.Send(new Request { Operation = "playback.play", FileName = "playback.csv", Axes = new[] { 4 } }).Ok, "Partial lift playback rejected");
@@ -513,10 +517,12 @@ namespace SimHub2SimRig.Tests
                     int[] detachedServos = counts(servoReads); int detachedSamples = engine.Snapshot().TriggerIntervals.Length;
                     Thread.Sleep(1800);
                     for (int axis = 4; axis <= 7; axis++) Check(Volatile.Read(ref servoReads[axis - 1]) - detachedServos[axis - 1] >= 3, "Hub monitoring continues at sender rate without HMI, axis " + axis);
-                    Check(engine.Snapshot().TriggerIntervals.Length > detachedSamples, "Com continues collecting sender timings without HMI");
+                    if (simHubCycle) Equal(detachedSamples, engine.Snapshot().TriggerIntervals.Length, "Event sender waits for new data without HMI");
+                    else Check(engine.Snapshot().TriggerIntervals.Length > detachedSamples, "Com continues collecting sender timings without HMI");
                     Equal(detachedTargets, Volatile.Read(ref targetWrites), "Stationary targets are not repeatedly rewritten without HMI");
                     Equal(detachedTriggers, Volatile.Read(ref triggerWrites), "Idle sender does not emit movement triggers after detach");
                     Status reattached = new ComClient(pipeName).Send(new Request { Operation = "status" }).Status;
+                    Equal(simHubCycle ? "simhub_cycle" : "oversampling", reattached.SenderMode, "Restarted HMI receives the sender mode from Com");
                     Check(reattached.Initialized && reattached.TriggerIntervals.Length > 0 && reattached.SimHubIntervals.Length > 0, "Restarted HMI receives initialization and both timing histories");
                     int[] reattachedServos = counts(servoReads); Thread.Sleep(1800);
                     for (int axis = 4; axis <= 7; axis++) Check(Volatile.Read(ref servoReads[axis - 1]) - reattachedServos[axis - 1] >= 3, "Hub monitoring remains active after HMI reconnect, axis " + axis);
@@ -637,8 +643,8 @@ namespace SimHub2SimRig.Tests
                             Check(lastRow.Top >= mainGrid.ColumnHeadersHeight && lastRow.Bottom <= mainGrid.ClientSize.Height, "Axis seven is fully visible without a redraw: " + name);
                         }
                         var mainButtons = Descendants(form).OfType<System.Windows.Forms.Button>().ToArray();
-                        var init = mainButtons.Single(b => b.Text == "INIT");
-                        var start = mainButtons.Single(b => b.Text == "START");
+                        var init = mainButtons.Single(b => b.Name == "initialize");
+                        var start = mainButtons.Single(b => b.Name == "startCom");
                         Equal(!context.Status.Initialized && !start.Visible, init.Visible, "INIT shown unless START overlays it or initialization is complete");
                         if (!context.Status.Initialized)
                         {
@@ -646,16 +652,33 @@ namespace SimHub2SimRig.Tests
                             Check(active.Font.Size >= 24 && active.Width >= 200 && active.Height >= 96, "INIT/START is a large prominent button");
                             Equal(!context.Status.Busy, active.Enabled, "INIT/START enabled only while waiting for a request");
                             Check(mainButtons.Where(b => b != active).All(b => !b.Enabled), "Every other button disabled before INIT completes");
-                            var modeMenu = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Text == "Mode");
+                            var modeMenu = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Name == "modeMenu");
                             Check(modeMenu.DropDownItems.OfType<System.Windows.Forms.ToolStripMenuItem>().All(item => !item.Enabled), "Motion modes disabled before INIT completes");
                         }
-                        var lightOn = mainButtons.Single(b => b.Text == context.T("Panels", "light_on"));
-                        var lightOff = mainButtons.Single(b => b.Text == context.T("Panels", "light_off"));
+                        var lightOn = mainButtons.Single(b => b.Name == "lightOn");
+                        var lightOff = mainButtons.Single(b => b.Name == "lightOff");
                         Equal(lightOn.Top, lightOff.Top, "Light buttons share a row");
                         Check(lightOff.Left >= lightOn.Right, "Light buttons do not overlap");
-                        var modeItems = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Text == "Mode").DropDownItems.OfType<System.Windows.Forms.ToolStripMenuItem>().ToArray();
+                        var modeMenuItems = form.MainMenuStrip.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Single(item => item.Name == "modeMenu").DropDownItems;
+                        var modeItems = modeMenuItems.OfType<System.Windows.Forms.ToolStripMenuItem>().Where(item => !item.Name.StartsWith("senderMode_")).ToArray();
                         Equal(3, modeItems.Length, "Mode menu offers all three modes");
                         Equal(context.Status.Mode, (string)modeItems.Single(item => item.Checked).Tag, "Mode menu marks the mode confirmed by Com");
+                        var senderChoices = modeMenuItems.OfType<System.Windows.Forms.ToolStripMenuItem>().Where(item => item.Name.StartsWith("senderMode_")).ToArray();
+                        Equal(2, senderChoices.Length, "Mode menu contains the independent sender choices as menu items");
+                        Check(!modeMenuItems.OfType<System.Windows.Forms.ToolStripControlHost>().Any(), "Mode selection contains no hosted radio controls");
+                        Equal(1, modeMenuItems.OfType<System.Windows.Forms.ToolStripSeparator>().Count(), "Motion and sender modes have a separator");
+                        Check(senderChoices.Select(r => r.Text).SequenceEqual(new[] { context.T("Panels", "sender_oversampling"), context.T("Panels", "sender_simhub_cycle") }), "Sender choices use the requested labels");
+                        string savedSenderMode = context.Status.SenderMode;
+                        foreach (string senderMode in new[] { "oversampling", "simhub_cycle" })
+                        {
+                            context.Status.SenderMode = senderMode;
+                            ((SimHub2SimRig.HMI.MainForm)form).UpdateStatus(context.Status);
+                            Equal(senderMode, (string)senderChoices.Single(r => r.Checked).Tag, "Sender menu follows sender mode confirmed by Com");
+                            Equal(context.Status.Mode, (string)modeItems.Single(item => item.Checked).Tag, "Sender selection preserves the independently selected motion mode");
+                            Check(senderChoices.All(r => r.Enabled == (context.Status.Initialized && !context.Status.Busy && !context.Status.Maintenance && !context.Status.Analysis && context.Status.Playback == "stopped")), "Sender choices follow operation interlocks");
+                        }
+                        context.Status.SenderMode = savedSenderMode;
+                        ((SimHub2SimRig.HMI.MainForm)form).UpdateStatus(context.Status);
                         var senderChart = Descendants(form).OfType<SimHub2SimRig.HMI.SenderIntervalChart>().Single();
                         Near(100, senderChart.ChartAreas[0].AxisY.Maximum, "Rendered sender y maximum");
                         Equal("", senderChart.ChartAreas[0].AxisX.Title, "Rendered sender has no x title");
@@ -665,10 +688,10 @@ namespace SimHub2SimRig.Tests
                         {
                             Check(source.Enabled, "Chart selection remains available: " + source.Text);
                             source.Checked = true;
-                            Equal(context.Status.Connected && source.Text != "ModBus", senderChart.Series["SimHub"].Enabled, "SimHub visibility for " + source.Text);
+                            Equal(context.Status.Connected && (string)source.Tag != "ModBus", senderChart.Series["SimHub"].Enabled, "SimHub visibility for " + source.Text);
                             Equal(source.Text != "SimHub", senderChart.Series["ModBus"].Enabled, "ModBus visibility for " + source.Text);
                         }
-                        sources.Single(r => r.Text == "Beide").Checked = true;
+                        sources.Single(r => (string)r.Tag == "Both").Checked = true;
                     }
                     foreach (var button in Descendants(form).OfType<System.Windows.Forms.Button>())
                     {
@@ -710,8 +733,8 @@ namespace SimHub2SimRig.Tests
             main = new SimHub2SimRig.HMI.MainForm(context); main.UpdateStatus(status);
             Check(Descendants(main).OfType<System.Windows.Forms.Button>().All(b => !b.Enabled), "INIT and every action disabled during initialization");
             status.Busy = false; status.Activity = ""; status.LastError = "Test initialization failure"; main.UpdateStatus(status);
-            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Single(b => b.Text == "INIT").Enabled, "Failed initialization can be retried with INIT");
-            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Where(b => b.Text != "INIT").All(b => !b.Enabled), "Failure keeps other actions disabled");
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Single(b => b.Name == "initialize").Enabled, "Failed initialization can be retried with INIT");
+            Check(Descendants(main).OfType<System.Windows.Forms.Button>().Where(b => b.Name != "initialize").All(b => !b.Enabled), "Failure keeps other actions disabled");
             using (var child = new System.Windows.Forms.Form())
             {
                 child.Owner = main; main.UpdateStatus(status);
@@ -733,7 +756,7 @@ namespace SimHub2SimRig.Tests
             for (int i = 0; i < 7; i++) Equal(status.Axes[i].Load.ToString("F1") + " %", Convert.ToString(grid.Rows[i].Cells[2].Value), "Load display returns when SimHub is idle, axis " + (i + 1));
             status.Connected = false; main.UpdateStatus(status);
             status.Axes[0].Servo = 3; main.UpdateStatus(status);
-            Check(Convert.ToString(grid.Rows[0].Cells[3].Value).Contains("Drive fault"), "Grid displays true servo fault even for reason 5");
+            Check(Convert.ToString(grid.Rows[0].Cells[3].Value) == context.T("MainDialog", "drive_fault"), "Grid displays true servo fault even for reason 5");
             Equal(System.Drawing.Color.MistyRose, grid.Rows[0].DefaultCellStyle.BackColor, "True servo fault is red");
             status.Axes[0].Servo = 1;
             status.Messages = new[] { "2026-11-04 12:00:00.000 HMI connected", "2026-11-04 12:00:01.000 INIT request received by HMI", "2026-11-04 12:00:12.000 Initialization complete" };
@@ -851,6 +874,18 @@ namespace SimHub2SimRig.Tests
                 Run("Game telemetry budget and maintenance refresh", GameTelemetryBudget);
                 return failures == 0 ? 0 : 1;
             }
+            if (args.Contains("--sender-only"))
+            {
+                Run("Event-driven SimHub sender, live mode changes and idle monitoring", SenderModes);
+                return failures == 0 ? 0 : 1;
+            }
+            if (args.Contains("--language-only"))
+            {
+                Run("HMI language build guard rejects untranslated controls and invalid keys", HmiLanguageAudit);
+                Run("Language.ini controls HMI labels, formats, diagnostics and dialog buttons", HmiLanguagePresentation);
+                Run("WinForms render and minimum-window smoke tests", RenderUi);
+                return failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--performance-only"))
             {
                 int reportAt = Array.IndexOf(args, "--performance-report");
@@ -858,7 +893,16 @@ namespace SimHub2SimRig.Tests
                 Run("Sender scheduling and simulated bus contention", () => PerformanceBenchmarks(report));
                 return failures == 0 ? 0 : 1;
             }
-            if (args.Contains("--ui-only")) { Run("START waits for IPC connection before INIT", ComStartWorkflow); Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement); Run("Python U40.43 state mapping and actual servo faults", DriveStates); Run("WinForms render and minimum-window smoke tests", RenderUi); return failures == 0 ? 0 : 1; }
+            if (args.Contains("--ui-only"))
+            {
+                Run("START waits for IPC connection before INIT", ComStartWorkflow);
+                Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement);
+                Run("Python U40.43 state mapping and actual servo faults", DriveStates);
+                Run("HMI language build guard rejects untranslated controls and invalid keys", HmiLanguageAudit);
+                Run("Language.ini controls HMI labels, formats, diagnostics and dialog buttons", HmiLanguagePresentation);
+                Run("WinForms render and minimum-window smoke tests", RenderUi);
+                return failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--console-only"))
             {
                 Run("Actual Com launcher and awaited shutdown", ExecutableLifecycle);
@@ -905,6 +949,8 @@ namespace SimHub2SimRig.Tests
             Run("SimHub recording inactivity, raw changes and separate CSV files", RecordingInactivity);
             Run("UDP, named pipe, maintenance, leveling, grease and playback integration", Integration);
             Run("SimHub receive intervals, disconnect reset and bounded history", SimHubReceiveTimings);
+            Run("Event-driven SimHub sender, live mode changes and idle monitoring", SenderModes);
+            Run("SimHub Cycle maintenance, leveling, grease, playback and HMI reconnection", () => Integration(true));
             Run("Actual Com EXE, single instance and awaited shutdown", ExecutableLifecycle);
             Run("Abrupt console-process exit finishes lowering", ConsoleProcessExit);
             Run("Native console WM_CLOSE finishes lowering", ConsoleWindowClose);
@@ -913,6 +959,8 @@ namespace SimHub2SimRig.Tests
                 Check(assembly.GetReferencedAssemblies().All(a => !a.Name.Contains("SimHub2SimRigCom")), "No engine reference in HMI");
                 Check(assembly.GetTypes().All(t => t.Namespace != "SimHub2SimRig.Com"), "No Com types in HMI");
             });
+            Run("HMI language build guard rejects untranslated controls and invalid keys", HmiLanguageAudit);
+            Run("Language.ini controls HMI labels, formats, diagnostics and dialog buttons", HmiLanguagePresentation);
             Run("WinForms render and minimum-window smoke tests", RenderUi);
             Run("Python U40.43 state mapping and actual servo faults", DriveStates);
             WriteReport("test-results.json");

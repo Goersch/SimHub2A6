@@ -27,6 +27,7 @@ namespace SimHub2SimRig.Shared
         public string Operation { get; set; }
         public string FileName { get; set; }
         public string Mode { get; set; }
+        public string SenderMode { get; set; }
         public int FirstAxis { get; set; }
         public int LastAxis { get; set; }
         public int Position { get; set; }
@@ -80,6 +81,7 @@ namespace SimHub2SimRig.Shared
         public string LastError { get; set; }
         public string[] Messages { get; set; }
         public string Mode { get; set; }
+        public string SenderMode { get; set; }
         public bool Leveling { get; set; }
         public int FixedAxis { get; set; }
         public bool Greasing { get; set; }

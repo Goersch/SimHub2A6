@@ -18,4 +18,10 @@
     <ProjectReference Include="..\Shared\SimHub2SimRig.Shared.csproj"><Project>{C0C24EA6-DDF0-4A09-9D3C-A12B89A69801}</Project><Name>SimHub2SimRig.Shared</Name></ProjectReference>
     <Compile Include="Program.cs" /><Compile Include="MaintenanceForm.cs" /><Compile Include="AnalysisForm.cs" /><Compile Include="DriveStateView.cs" /><Compile Include="SenderIntervalChart.cs" /><Compile Include="StatusHistoryForm.cs" /><Compile Include="ComStartup.cs" /><Compile Include="LogTable.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="LanguageText.cs" />
+  </ItemGroup>
+  <Target Name="CheckHmiLanguage" BeforeTargets="BeforeBuild">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\Tests\check_hmi_language.ps1&quot;" />
+  </Target>
 </Project>

@@ -13,6 +13,21 @@ See [CSharp/README.md](CSharp/README.md) for the process boundary, launch option
 test coverage and package build. Python remains the wire-format oracle and
 legacy regression baseline; the C# applications never invoke Python.
 
+HMI changes require the `hmi-language` agent described in
+[`CSharp/Agents/HmiLanguage.md`](CSharp/Agents/HmiLanguage.md), as directed by
+`AGENTS.md`. Its project configuration is `.codex/agents/hmi-language.toml`.
+Both the script build and the HMI project build run the static language guard;
+it can also be run separately:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File CSharp/Tests/check_hmi_language.ps1
+```
+
+The agent covers dynamic UI text and backend-message presentation that static
+checks cannot fully resolve. Re-run it after further HMI edits. Language.ini is
+loaded when the HMI starts, so restart HMI after changing translations. Keep
+protocol values and control names/tags independent of displayed wording.
+
 Install optional development tools:
 
 ```powershell

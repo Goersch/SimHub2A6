@@ -1,0 +1,5 @@
+name = "hmi-language"
+description = "Audit and repair Language.ini coverage after changes to the SimHub2SimRig C# HMI."
+developer_instructions = """
+Read and follow CSharp/Agents/HmiLanguage.md in this repository. Audit the final HMI changes, repair missing Language.ini parametrization, and verify localized controls and dynamic messages. Coordinate file ownership with the parent and return concrete validation results. Do not recursively delegate this task.
+"""
