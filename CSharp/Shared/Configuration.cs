@@ -114,6 +114,19 @@ namespace SimHub2SimRig.Shared
             Require(Ini.Int("simhub", "position_min") < Ini.Int("simhub", "position_max"), "Invalid SimHub range");
             Require(Ini.Int("simhub", "udp_port") >= 1 && Ini.Int("simhub", "udp_port") <= 65535, "Invalid UDP port");
             Require(Ini.Number("motion_limits", "minimum_mm") < Ini.Number("motion_limits", "maximum_mm"), "Invalid motion limits");
+            foreach (string key in new[] { "c00_06_axes_1_3", "c00_06_axes_4_7" }) RequireInitRange(key, 0, 12000);
+            RequireInitRange("c01_13_axes_4_7", 0, 4);
+            RequireInitRange("c01_14_axes_4_7", 0, 2000);
+            foreach (string key in new[] { "c00_22", "c04_01", "c04_05" }) RequireInitRange(key, 0, 1);
+            foreach (string key in new[] { "c03_02", "c03_04" }) RequireInitRange(key, 1, int.MaxValue);
+            foreach (string key in new[] { "c04_08", "c04_14", "c04_18", "c04_1c" }) RequireInitRange(key, 0, 37);
+            RequireInitRange("c04_12", 0, 65535);
+            RequireInitRange("c05_0c", 5, 3000);
+            RequireInitRange("c10_00", 0, 3);
+            RequireInitRange("c10_01", -2, 35);
+            foreach (string key in new[] { "c05_0a", "c10_04", "c10_06" }) RequireInitRange(key, 0, 3600000);
+            foreach (string key in new[] { "parameter_delay_s", "save_delay_s", "restart_delay_s" })
+                Require(Ini.Number("a6_init", key) >= 0, "Must be nonnegative: a6_init." + key);
             int hf = Ini.Int("control", "hub_axis_from"), ht = Ini.Int("control", "hub_axis_to");
             Require(hf == 4 && ht == 7, "Hub geometry requires axes 4..7");
             foreach (var pair in new[] { "modbus:baud", "modbus:serial_timeout_s", "modbus:inter_frame_delay_s", "modbus:response_poll_delay_s", "modbus:queue_drain_timeout_s", "modbus:task_wait_timeout_s", "modbus:worker_join_timeout_s", "simhub:sender_cycle_s", "simhub:disconnect_timeout_s", "simulation:simulation_interval_s", "control:actual_position_poll_interval_s", "control:axis_status_refresh_ms", "control:axis_wait_timeout_s", "control:homing_wait_timeout_s", "control:wait_poll_interval_s", "a6:operation_timeout_s", "a6:poll_interval_s", "motion_limits:reference_spindle_pitch_mm", "motion_limits:reference_app_units_per_mm", "rig:DistanceFrontDrivesLeft2Right", "rig:DistanceRearDrivesLeft2Right", "rig:DistanceFront2RearDrives", "rig:CenterOfGravityHeight", "leveling:load_rate_units_per_percent", "grease:position_poll_interval_s", "grease:move_timeout_s" })
@@ -127,6 +140,11 @@ namespace SimHub2SimRig.Shared
                 foreach (string key in new[] { "filter_alpha", "raw_weight" }) Require(Ini.Number(s, key) >= 0 && Ini.Number(s, key) <= 1, "Invalid leveling weight");
             }
             Require(Ini.Number("grease", "warning_after_operating_hours") > 0 && Ini.Number("grease", "warning_after_operating_hours") < Ini.Number("grease", "alarm_after_operating_hours"), "Invalid grease limits");
+        }
+        void RequireInitRange(string key, int minimum, int maximum)
+        {
+            int value = Ini.Int("a6_init", key);
+            Require(value >= minimum && value <= maximum, "Invalid A6 initialization parameter: a6_init." + key);
         }
         static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
         public string PathFor(string relative) { return Path.Combine(Root, relative); }

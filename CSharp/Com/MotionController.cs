@@ -18,20 +18,27 @@ namespace SimHub2SimRig.Com
         public void Reset() { lock (parameterGate) parameters.Clear(); lock (positionGate) positions.Clear(); }
         public void Initialize(int axis)
         {
+            Ini ini = config.Ini;
             Bus.Write(axis, 0x0411, 0);
-            bool save = Bus.Read(axis, 0x0401)[0] != 1;
-            sleep(.2);
-            Bus.Write(axis, 0x0022, 1);
-            Bus.U32(axis, 0x0302, 131072); Bus.U32(axis, 0x0304, 131072);
-            Bus.Write(axis, 0x0401, 1); Bus.Write(axis, 0x0405, 1); Bus.Write(axis, 0x0408, 0);
-            Bus.Write(axis, 0x0412, 1); Bus.Write(axis, 0x0414, 19); Bus.Write(axis, 0x0418, 25); Bus.Write(axis, 0x041c, 0);
-            Bus.U32(axis, 0x050a, 10); Bus.Write(axis, 0x050c, 10);
+            bool save = Bus.Read(axis, 0x0401)[0] != ini.Int("a6_init", "c04_01");
+            sleep(ini.Number("a6_init", "parameter_delay_s"));
+            Bus.Write(axis, 0x0006, ini.Int("a6_init", axis <= 3 ? "c00_06_axes_1_3" : "c00_06_axes_4_7"));
+            Bus.Write(axis, 0x0022, ini.Int("a6_init", "c00_22"));
+            if (axis >= 4 && axis <= 7)
+            {
+                Bus.Write(axis, 0x0113, ini.Int("a6_init", "c01_13_axes_4_7"));
+                Bus.Write(axis, 0x0114, ini.Int("a6_init", "c01_14_axes_4_7"));
+            }
+            Bus.U32(axis, 0x0302, ini.Int("a6_init", "c03_02")); Bus.U32(axis, 0x0304, ini.Int("a6_init", "c03_04"));
+            Bus.Write(axis, 0x0401, ini.Int("a6_init", "c04_01")); Bus.Write(axis, 0x0405, ini.Int("a6_init", "c04_05")); Bus.Write(axis, 0x0408, ini.Int("a6_init", "c04_08"));
+            Bus.Write(axis, 0x0412, ini.Int("a6_init", "c04_12")); Bus.Write(axis, 0x0414, ini.Int("a6_init", "c04_14")); Bus.Write(axis, 0x0418, ini.Int("a6_init", "c04_18")); Bus.Write(axis, 0x041c, ini.Int("a6_init", "c04_1c"));
+            Bus.U32(axis, 0x050a, ini.Int("a6_init", "c05_0a")); Bus.Write(axis, 0x050c, ini.Int("a6_init", "c05_0c"));
             Bus.U32(axis, 0x0e00, config.Units(axis, config.Ini.Number("motion_limits", "maximum_mm")));
             Bus.U32(axis, 0x0e03, config.Units(axis, config.Ini.Number("motion_limits", "minimum_mm")));
-            Bus.Write(axis, 0x1000, 2); Bus.Write(axis, 0x1001, 17);
-            Bus.U32(axis, 0x1004, 100); Bus.U32(axis, 0x1006, 100);
+            Bus.Write(axis, 0x1000, ini.Int("a6_init", "c10_00")); Bus.Write(axis, 0x1001, ini.Int("a6_init", "c10_01"));
+            Bus.U32(axis, 0x1004, ini.Int("a6_init", "c10_04")); Bus.U32(axis, 0x1006, ini.Int("a6_init", "c10_06"));
             Bus.U32(axis, 0x100b, config.Units(axis, config.Ini.Number("motion_limits", "homing_mm")));
-            if (save) { sleep(.2); Bus.Write(axis, 0x0a05, 1); sleep(2); Log.Write("Axis " + axis + ": restart required; check ALF1.0 and press SET"); }
+            if (save) { sleep(ini.Number("a6_init", "save_delay_s")); Bus.Write(axis, 0x0a05, 1); sleep(ini.Number("a6_init", "restart_delay_s")); Log.Write("Axis " + axis + ": restart required; check ALF1.0 and press SET"); }
             else Bus.Write(axis, 0x0a05, 0);
         }
         public bool Homed(int axis)
@@ -45,7 +52,7 @@ namespace SimHub2SimRig.Com
             if (!ignore && Homed(axis)) return;
             if (initialize)
             {
-                Bus.Write(axis, 0x1000, 2);
+                Bus.Write(axis, 0x1000, config.Ini.Int("a6_init", "c10_00"));
                 Bus.Write(axis, 0x1002, config.PitchRpm(axis, config.Ini.Int("a6", "homing_initial_rpm")));
                 Bus.Write(axis, 0x1003, config.PitchRpm(axis, config.Ini.Int("a6", "homing_end_rpm")));
                 Bus.U32(axis, 0x1004, config.Ini.Int("a6", "homing_accel_ms")); Bus.U32(axis, 0x1006, config.Ini.Int("a6", "homing_decel_ms"));

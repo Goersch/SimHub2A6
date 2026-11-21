@@ -71,8 +71,9 @@ namespace SimHub2SimRig.Tests
                 foreach (var pair in scenario.Frames)
                 {
                     string[] actual = wires[pair.Key].Frames.Select(Hex).ToArray();
-                    Equal(pair.Value.Length, actual.Length, scenario.Name + " axis " + axis + " " + pair.Key + " length");
-                    for (int i = 0; i < actual.Length; i++) Equal(pair.Value[i], actual[i], scenario.Name + " axis " + axis + " high=" + scenario.High + " frame " + i + " " + pair.Key);
+                    string[] expected = WithAdditionalInitParameters(pair.Value);
+                    Equal(expected.Length, actual.Length, scenario.Name + " axis " + axis + " " + pair.Key + " length");
+                    for (int i = 0; i < actual.Length; i++) Equal(expected[i], actual[i], scenario.Name + " axis " + axis + " high=" + scenario.High + " frame " + i + " " + pair.Key);
                 }
             }
         }
@@ -203,8 +204,9 @@ namespace SimHub2SimRig.Tests
             foreach (var pair in scenario.Frames)
             {
                 string[] actual = wires[pair.Key].Frames.Select(Hex).ToArray();
-                Equal(pair.Value.Length, actual.Length, scenario.Name + " " + pair.Key + " frame count");
-                for (int i = 0; i < actual.Length; i++) Equal(pair.Value[i], actual[i], scenario.Name + " " + pair.Key + " frame " + i);
+                string[] expected = WithAdditionalInitParameters(pair.Value);
+                Equal(expected.Length, actual.Length, scenario.Name + " " + pair.Key + " frame count");
+                for (int i = 0; i < actual.Length; i++) Equal(expected[i], actual[i], scenario.Name + " " + pair.Key + " frame " + i);
             }
         }
         static void LifecycleTrace(Scenario scenario)
@@ -851,6 +853,15 @@ namespace SimHub2SimRig.Tests
             root = args[0]; testRoot = Prepare(root); config = new Configuration(testRoot);
             int binAt = Array.IndexOf(args, "--bin");
             binaryDirectory = binAt >= 0 ? args[binAt + 1] : Path.Combine(root, "CSharp", "bin");
+            if (args.Contains("--initialization-only"))
+            {
+                Run("Configured A6 INIT values, saving, word order and validation", InitializationSettings);
+                Oracle initializationOracle = Json.Read<Oracle>(Path.Combine(root, "CSharp", "Tests", "reference.json"));
+                Run("Default INIT telegrams match Python plus axis-group parameters for all axes and word orders", () => {
+                    foreach (Scenario scenario in initializationOracle.Scenarios.Where(s => s.Name == "initialize" || s.Name == "initialize-save")) Trace(scenario);
+                });
+                return failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--configuration-only"))
             {
                 Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement);
@@ -914,6 +925,7 @@ namespace SimHub2SimRig.Tests
             Oracle oracle = Json.Read<Oracle>(Path.Combine(root, "CSharp", "Tests", "reference.json"));
             Run("Configured HMI monitor and disconnected-screen fallback", MonitorPlacement);
             Run("Independent Com and HMI configuration and IPC settings", ConfigurationSeparation);
+            Run("Configured A6 INIT values, saving, word order and validation", InitializationSettings);
             Run("12,000 Python RTU frame vectors", () => {
                 foreach (FrameCase c in oracle.Frames) Equal(c.Hex, Hex(c.Operation == "read" ? Rtu.Read(c.Axis, c.Address, c.Values[0]) : c.Operation == "write" ? Rtu.Write(c.Axis, c.Address, c.Values[0]) : Rtu.Multi(c.Axis, c.Address, c.Values)), "RTU " + c.Operation);
             });

@@ -105,6 +105,32 @@ zeigen dabei zum Beispiel `COM Error (COM6) - I try again in 10 seconds` und
 die Fehlerursache. Erst wenn alle Ports geöffnet sind, beginnt die
 Antriebsinitialisierung. Das Beenden von Com unterbricht die Wartezeit sofort.
 
+Die Treiberparameter der Initialisierung stehen in der COM-INI unter
+`[a6_init]`. Jeder Schlüssel nennt den A6-Parameter, zum Beispiel `c03_02`
+für `C03.02` an Modbus-Adresse `0x0302`; die Kommentare beschreiben Bedeutung,
+Einheit und bisherige Vorgabe. Dort sind auch die Wartezeiten vor dem
+Parameterschreiben und Speichern sowie nach dem Speicherbefehl einstellbar.
+Für `C00.06` schreibt INIT den Wert `c00_06_axes_1_3 = 1` für Achsen 1–3
+und `c00_06_axes_4_7 = 2` für Achsen 4–7. Die Werte werden unverändert an
+Register `0x0006` übertragen. Zusätzlich setzt INIT ausschließlich für Achsen
+4–7 `C01.13 = 1` (interner Sollwert als Geschwindigkeitsvorsteuerung) und
+`C01.14 = 10 %`. In der INI stehen dafür `c01_13_axes_4_7 = 1` und
+`c01_14_axes_4_7 = 100`; der zweite Wert wird in Registereinheiten von `0,1 %`
+angegeben. Für Achsen 1–3 bleiben diese beiden Register unverändert.
+Die übrigen Standardwerte erzeugen dieselben
+Telegramme wie bisher. Die neue Sektion
+muss beim Aktualisieren einer bestehenden COM-INI übernommen werden;
+ungültige Werte werden vor dem Öffnen der Ports zurückgewiesen.
+
+Bei jedem INIT werden die Parameter für alle aktivierten Achsen geschrieben.
+Dauerhaft gespeichert wird wie bisher nur, wenn der zuvor gelesene Wert von
+`C04.01` vom konfigurierten `c04_01` abweicht. Das ist kein Vergleich aller
+Treiberparameter. `C04.11 = 0` zum Abschalten des Servos und die Speicherbefehle
+`C0A.05 = 1/0` bleiben feste Ablaufbefehle. Weggrenzen und Referenzoffset werden
+weiterhin aus `[motion_limits]` achsabhängig umgerechnet. Die eigentliche
+Referenzfahrt übernimmt `c10_00`, verwendet für Beschleunigungs- und Bremszeit
+aber die Werte `homing_accel_ms` und `homing_decel_ms` aus `[a6]`.
+
 Com sucht `INI/SimHub2SimRigCom.ini`, HMI sucht `INI/SimHub2SimRigHMI.ini`, jeweils ausgehend vom EXE-Verzeichnis in den übergeordneten Verzeichnissen. Jedes Programm lädt nur seine eigene Konfiguration. Alternativ lässt sich das Datenverzeichnis explizit angeben:
 
 ```powershell

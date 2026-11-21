@@ -49,6 +49,8 @@ namespace SimHub2SimRig.Tests
             string crcKey = original.Keys("MessageTexts").Single(key => original.Get("MessageTexts", key) == "Modbus CRC error");
             change("MessageTexts", crcKey, "CRC-Pruefung fehlgeschlagen");
             change("MessageTexts", "telemetry", "Achse {axis}: {error}");
+            change("MessageTexts", "invalid_a6_init", "Ungueltiger Treiberparameter aus Sprachdatei: {setting}");
+            change("MessageTexts", "nonnegative_value", "Wartezeit muss mindestens null sein: {setting}");
             File.WriteAllText(path, languageText);
             var ui = new UiContext(isolated, "SimHub2SimRig.LanguageTest." + Guid.NewGuid().ToString("N"));
             string screenshots = Path.Combine(root, "CSharp", "Tests", "screenshots");
@@ -68,6 +70,9 @@ namespace SimHub2SimRig.Tests
             Equal("System.InvalidOperationException: Initialisierung aus Sprachdatei", ui.Message("System.InvalidOperationException: Initialization"), "CLR exception prefixes retain the localized error");
             Equal("SimHub2SimRig.Com.CrcException: CRC-Pruefung fehlgeschlagen", ui.Message("SimHub2SimRig.Com.CrcException: Modbus CRC error"), "Application exception prefixes stay raw while the message is translated");
             Equal("External USB detail 42", ui.Message("External USB detail 42"), "Unknown external diagnostics remain available");
+            Equal("Ungueltiger Treiberparameter aus Sprachdatei: a6_init.c03_02", ui.Message("Invalid A6 initialization parameter: a6_init.c03_02"), "INIT validation is configurable while the setting identifier stays intact");
+            Equal("Wartezeit muss mindestens null sein: a6_init.save_delay_s", ui.Message("Must be nonnegative: a6_init.save_delay_s"), "INIT wait validation comes from Language.ini");
+            Equal("System.IO.InvalidDataException: Ungueltiger Treiberparameter aus Sprachdatei: a6_init.c04_01", ui.Message("System.IO.InvalidDataException: Invalid A6 initialization parameter: a6_init.c04_01"), "Nested INIT validation retains the technical exception type");
             Status status;
             using (var engine = new Engine(new Configuration(isolated), true)) status = engine.Snapshot();
             status.Initialized = true; status.Playback = "stopped"; status.Mode = "simhub";
@@ -108,6 +113,10 @@ namespace SimHub2SimRig.Tests
                 Equal("12-34-56", Convert.ToString(table.Rows[0].Cells[1].Value), "History time format is configurable");
                 Equal("Initialisierung aus Sprachdatei", Convert.ToString(table.Rows[0].Cells[3].Value), "History translates presentation only");
                 Equal("[COM] 2026-11-18 12:34:56.789 Initialization", (string)table.Rows[0].Tag, "Raw log entry stays intact");
+                const string initializationError = "[COM] 2026-11-18 12:34:57.123 Invalid A6 initialization parameter: a6_init.c03_02";
+                table.AddMessage(initializationError);
+                Equal("Ungueltiger Treiberparameter aus Sprachdatei: a6_init.c03_02", Convert.ToString(table.Rows[1].Cells[3].Value), "Dynamic INIT diagnostics use the configured language template");
+                Equal(initializationError, (string)table.Rows[1].Tag, "INIT diagnostic localization preserves the original log record");
             }
             using (var chart = new SenderIntervalChart(60, ui)) Equal("Millisekunden", chart.ChartAreas[0].AxisY.Title, "Chart units are configurable");
             using (var history = new StatusHistoryForm(new string[0], ui)) Equal("Parametrierte Meldungen", history.Text, "History title is configurable");
